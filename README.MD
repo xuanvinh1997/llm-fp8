@@ -140,6 +140,8 @@ This implementation is based on Hugging Face's Accelerate library with official 
 FP8 training draws from the following research:
 - [FP8 Formats for Deep Learning](https://arxiv.org/abs/2209.05433)
 
-## License
+## Troubleshooting
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+```bash
+sudo apt-get update && sudo apt-get install --reinstall -y   libmpich-dev   hwloc-nox libmpich12 mpich
+```

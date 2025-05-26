@@ -1,0 +1,4 @@
+transformers==4.51.3
+accelerate
+datasets
+wandb
