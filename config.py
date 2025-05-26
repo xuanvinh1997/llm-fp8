@@ -9,7 +9,7 @@ class TrainingConfig:
     # Model and data
     model_name: str = "Qwen/Qwen2.5-3B"
     tokenizer_name: str = "Qwen/Qwen2.5-Math-1.5B-Instruct"
-    dataset_path: str = "data/instruction_dataset.json"
+    dataset_path: str = "nvidia/OpenMathInstruct-2"
     output_dir: str = "outputs/trained_model"
     
     # Dataset formatting options

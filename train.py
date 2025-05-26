@@ -271,7 +271,7 @@ def main():
     # Example 3: FP8 training with MS-AMP (official API)
     config_fp8_msamp = TrainingConfig(
         model_name="Qwen/Qwen2.5-Math-1.5B-Instruct",
-        dataset_path="data/instruction_dataset.json",
+        dataset_path="nvidia/OpenMathInstruct-2",
         output_dir="outputs/qwen-math-fp8-msamp",
         mixed_precision="fp8",  # Official FP8 support!
         fp8_backend="msamp",
@@ -292,7 +292,7 @@ def main():
     )
     
     # Choose configuration
-    config = config_fp8_te  # Change this to test different configurations
+    config = config_fp8_msamp  # Change this to test different configurations
     
     # Create output directory
     os.makedirs(config.output_dir, exist_ok=True)
