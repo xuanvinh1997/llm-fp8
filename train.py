@@ -7,7 +7,7 @@ Based on: https://huggingface.co/docs/accelerate/usage_guides/low_precision_trai
 
 import os
 import logging
-
+from typing import Tuple
 
 from torch.utils.data import DataLoader
 
@@ -18,17 +18,21 @@ from accelerate.utils import (
 )
 
 from transformers import (
-    DataCollatorForSeq2Seq
+    DataCollatorForSeq2Seq,
+    AutoModelForCausalLM,
+    AutoTokenizer
 )
+import torch
+
 from config import TrainingConfig
 from dataset import InstructionDataset
 from loss import LossManager
 from model import ModelManager
 from optimizer import OptimizerManager
 
-# Configure logging
+# Configure standard logging for pre-accelerator initialization
 logging.basicConfig(level=logging.INFO)
-logger = get_logger(__name__)
+std_logger = logging.getLogger(__name__)
 
 
 class Trainer:
@@ -38,6 +42,14 @@ class Trainer:
         self.config = config
         self._setup_accelerator()
         self._setup_logging()
+        
+        # Now we can use the accelerate logger
+        self.logger = get_logger(__name__)
+        
+        # Log configuration after accelerator is initialized
+        self.logger.info("Training Configuration:")
+        for key, value in config.__dict__.items():
+            self.logger.info(f"  {key}: {value}")
         
     def _setup_accelerator(self):
         """Initialize Accelerator with official FP8 support"""
@@ -52,16 +64,16 @@ class Trainer:
             fp8_kwargs = self.config.get_fp8_kwargs()
             if fp8_kwargs:
                 kwarg_handlers.append(fp8_kwargs)
-                logger.info(f"FP8 enabled with {self.config.fp8_backend} backend")
+                std_logger.info(f"FP8 enabled with {self.config.fp8_backend} backend")
         
         # Log precision configuration
-        logger.info(f"Mixed precision: {self.config.mixed_precision}")
+        std_logger.info(f"Mixed precision: {self.config.mixed_precision}")
         if self.config.mixed_precision == "fp8":
-            logger.info(f"FP8 backend: {self.config.fp8_backend}")
+            std_logger.info(f"FP8 backend: {self.config.fp8_backend}")
             if self.config.fp8_backend == "te":
-                logger.info(f"FP8 format: {self.config.te_fp8_format}")
+                std_logger.info(f"FP8 format: {self.config.te_fp8_format}")
             elif self.config.fp8_backend == "msamp":
-                logger.info(f"MS-AMP opt level: {self.config.msamp_opt_level}")
+                std_logger.info(f"MS-AMP opt level: {self.config.msamp_opt_level}")
         
         self.accelerator = Accelerator(
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
@@ -125,13 +137,13 @@ class Trainer:
         )
         
         # Training loop - no manual FP8 context management needed
-        logger.info("Starting training...")
-        logger.info(f"Num examples: {len(train_dataset)}")
-        logger.info(f"Num epochs: {self.config.num_epochs}")
-        logger.info(f"Total steps: {num_training_steps}")
+        self.logger.info("Starting training...")
+        self.logger.info(f"Num examples: {len(train_dataset)}")
+        self.logger.info(f"Num epochs: {self.config.num_epochs}")
+        self.logger.info(f"Total steps: {num_training_steps}")
         
         if self.config.mixed_precision == "fp8":
-            logger.info("FP8 training active - Accelerate handles precision automatically")
+            self.logger.info("FP8 training active - Accelerate handles precision automatically")
         
         global_step = 0
         
@@ -170,7 +182,7 @@ class Trainer:
                     avg_loss = total_loss / (step + 1)
                     lr = scheduler.get_last_lr()[0]
                     
-                    logger.info(
+                    self.logger.info(
                         f"Epoch {epoch}, Step {global_step}: "
                         f"Loss = {avg_loss:.4f}, LR = {lr:.2e}"
                     )
@@ -200,7 +212,7 @@ class Trainer:
             
             # End of epoch logging
             avg_epoch_loss = total_loss / len(train_dataloader)
-            logger.info(f"Epoch {epoch} completed. Average loss: {avg_epoch_loss:.4f}")
+            self.logger.info(f"Epoch {epoch} completed. Average loss: {avg_epoch_loss:.4f}")
         
         # Save final model
         self._save_final_model(model, tokenizer)
@@ -215,7 +227,7 @@ class Trainer:
         
         if self.accelerator.is_main_process:
             tokenizer.save_pretrained(output_dir)
-            logger.info(f"Checkpoint saved to {output_dir}")
+            self.logger.info(f"Checkpoint saved to {output_dir}")
     
     def _save_final_model(self, model, tokenizer):
         """Save final trained model"""
@@ -229,7 +241,7 @@ class Trainer:
                 is_main_process=self.accelerator.is_main_process
             )
             tokenizer.save_pretrained(self.config.output_dir)
-            logger.info(f"Final model saved to {self.config.output_dir}")
+            self.logger.info(f"Final model saved to {self.config.output_dir}")
 
 
 def main():
@@ -285,10 +297,11 @@ def main():
     # Create output directory
     os.makedirs(config.output_dir, exist_ok=True)
     
-    # Log configuration
-    logger.info("Training Configuration:")
-    for key, value in config.__dict__.items():
-        logger.info(f"  {key}: {value}")
+    # Use standard logger before accelerator initialization
+    std_logger.info("Initializing training...")
+    std_logger.info(f"Output directory: {config.output_dir}")
+    std_logger.info(f"Model: {config.model_name}")
+    std_logger.info(f"Mixed precision: {config.mixed_precision}")
     
     # Initialize and run trainer
     trainer = Trainer(config)

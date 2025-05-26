@@ -5,12 +5,16 @@ from typing import Optional, Tuple
 
 @dataclass
 class TrainingConfig:
-    """Training configuration parameters with official FP8 support"""
+    """Training configuration parameters with official FP8 support and enhanced dataset options"""
     # Model and data
     model_name: str = "Qwen/Qwen2.5-3B"
     tokenizer_name: str = "Qwen/Qwen2.5-Math-1.5B-Instruct"
     dataset_path: str = "data/instruction_dataset.json"
     output_dir: str = "outputs/trained_model"
+    
+    # Dataset formatting options
+    format_style: str = "auto"  # "auto", "qwen", "llama"
+    mask_instruction: bool = False  # Whether to mask instruction tokens in loss computation
     
     # Training hyperparameters
     num_epochs: int = 3
@@ -89,3 +93,10 @@ class TrainingConfig:
             )
         else:
             raise ValueError(f"Unsupported FP8 backend: {self.fp8_backend}")
+    
+    def validate_dataset_config(self) -> bool:
+        """Validate dataset configuration"""
+        valid_formats = ["auto", "qwen", "llama"]
+        if self.format_style not in valid_formats:
+            raise ValueError(f"Invalid format_style: {self.format_style}. Must be one of {valid_formats}")
+        return True

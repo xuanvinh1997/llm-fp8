@@ -1,3 +1,10 @@
+import torch
+import logging
+from typing import Tuple
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from config import TrainingConfig
+
+logger = logging.getLogger(__name__)
 
 
 class ModelManager:
@@ -10,7 +17,7 @@ class ModelManager:
         
         # Load tokenizer
         tokenizer = AutoTokenizer.from_pretrained(
-            config.model_name,
+            config.tokenizer_name,  # Use tokenizer_name from config
             trust_remote_code=True,
             use_fast=True
         )
