@@ -71,59 +71,10 @@ pip install -r requirements.txt
 python train.py
 ```
 
-## Configuration Options
-
-The script includes several pre-configured training options:
-
-### 1. BF16 Training (Default for most GPUs)
-
-```python
-config = TrainingConfig(
-    model_name="Qwen/Qwen2.5-Math-1.5B-Instruct",
-    dataset_path="data/instruction_dataset.json",
-    output_dir="outputs/qwen-math-bf16",
-    mixed_precision="bf16"
-)
+## training
+```bash
+python train.py --preset fp8_msamp --dataset_path nvidia/OpenMathInstruct-2 --model_name Qwen/Qwen2.5-3B --tokenizer_name Qwen/Qwen2.5-Math-1.5B-Instruct --output_dir outputs/qwen-fp8-msamp
 ```
-
-### 2. FP8 Training with TransformersEngine
-
-```python
-config = TrainingConfig(
-    model_name="Qwen/Qwen2.5-Math-1.5B-Instruct",
-    dataset_path="data/instruction_dataset.json",
-    output_dir="outputs/qwen-math-fp8-te",
-    mixed_precision="fp8",  # Official FP8 support!
-    fp8_backend="te",
-    te_fp8_format="HYBRID",
-    batch_size=8,  # Can use larger batch size with FP8
-    gradient_accumulation_steps=4
-)
-```
-
-### 3. FP8 Training with MS-AMP
-
-```python
-config = TrainingConfig(
-    model_name="Qwen/Qwen2.5-Math-1.5B-Instruct",
-    dataset_path="data/instruction_dataset.json",
-    output_dir="outputs/qwen-math-fp8-msamp",
-    mixed_precision="fp8", 
-    fp8_backend="msamp",
-    msamp_opt_level="O2"
-)
-```
-
-## Advanced Configuration
-
-You can modify all training parameters by editing the `TrainingConfig` class in the script. Key parameters include:
-
-- `model_name`: HuggingFace model ID or local path
-- `dataset_path`: Path to instruction dataset (JSON file or HuggingFace dataset ID)
-- `num_epochs`, `batch_size`, `learning_rate`: Basic training hyperparameters
-- `mixed_precision`: Precision mode (`"no"`, `"fp16"`, `"bf16"`, or `"fp8"`)
-- `fp8_backend`: FP8 backend when using FP8 (`"te"`, `"msamp"`, or `"ao"`)
-- FP8 backend-specific configuration parameters
 
 ## Performance Comparison
 
