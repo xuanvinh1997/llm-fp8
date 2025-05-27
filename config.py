@@ -1,20 +1,17 @@
 from accelerate.utils import FP8RecipeKwargs
-from dataclasses import dataclass
-from typing import Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Optional, Tuple, Dict, Any
 
 
 @dataclass
 class TrainingConfig:
-    """Training configuration parameters with official FP8 support and enhanced dataset options"""
+    """Training configuration parameters with official FP8 support"""
+    
     # Model and data
     model_name: str = "Qwen/Qwen2.5-3B"
     tokenizer_name: str = "Qwen/Qwen2.5-Math-1.5B-Instruct"
-    dataset_path: str = "nvidia/OpenMathInstruct-2"
+    dataset_path: str = "data/instruction_dataset.json"
     output_dir: str = "outputs/trained_model"
-    
-    # Dataset formatting options
-    format_style: str = "auto"  # "auto", "qwen", "llama"
-    mask_instruction: bool = False  # Whether to mask instruction tokens in loss computation
     
     # Training hyperparameters
     num_epochs: int = 3
@@ -25,14 +22,12 @@ class TrainingConfig:
     max_length: int = 2048
     warmup_ratio: float = 0.1
     
-    # Precision configuration (official Accelerate API)
-    mixed_precision: str = "bf16"  # Options: "no", "fp16", "bf16", "fp8"
-    
-    # FP8 backend configuration (only used when mixed_precision="fp8")
-    fp8_backend: str = "te"  # Options: "te", "msamp", "ao"
+    # Precision configuration
+    mixed_precision: str = "bf16"  # "no", "fp16", "bf16", "fp8"
+    fp8_backend: str = "te"  # "te", "msamp", "ao"
     
     # TransformersEngine (TE) specific config
-    te_fp8_format: str = "HYBRID"  # Options: "E4M3", "E5M2", "HYBRID"
+    te_fp8_format: str = "HYBRID"  # "E4M3", "E5M2", "HYBRID"
     te_amax_history_len: int = 1024
     te_amax_compute_algo: str = "max"
     te_margin: int = 0
@@ -41,12 +36,9 @@ class TrainingConfig:
     te_use_autocast_during_eval: bool = False
     
     # MS-AMP specific config
-    msamp_opt_level: str = "O2"  # Options: "O1", "O2"
+    msamp_opt_level: str = "O2"  # "O1", "O2"
     
-    # TorchAO specific config (experimental)
-    # ao_* parameters can be added here as the API stabilizes
-    
-    # Other optimization settings
+    # Optimization settings
     gradient_checkpointing: bool = True
     dataloader_num_workers: int = 4
     
@@ -70,8 +62,8 @@ class TrainingConfig:
         if self.mixed_precision != "fp8":
             return None
             
-        if self.fp8_backend == "te":
-            return FP8RecipeKwargs(
+        backend_configs = {
+            "te": lambda: FP8RecipeKwargs(
                 backend="te",
                 fp8_format=self.te_fp8_format,
                 amax_history_len=self.te_amax_history_len,
@@ -80,23 +72,36 @@ class TrainingConfig:
                 interval=self.te_interval,
                 override_linear_precision=self.te_override_linear_precision,
                 use_autocast_during_eval=self.te_use_autocast_during_eval
-            )
-        elif self.fp8_backend == "msamp":
-            return FP8RecipeKwargs(
+            ),
+            "msamp": lambda: FP8RecipeKwargs(
                 backend="msamp",
                 opt_level=self.msamp_opt_level
-            )
-        elif self.fp8_backend == "ao":
-            return FP8RecipeKwargs(
-                backend="ao"
-                # Add ao-specific parameters as they become available
-            )
-        else:
+            ),
+            "ao": lambda: FP8RecipeKwargs(backend="ao")
+        }
+        
+        if self.fp8_backend not in backend_configs:
             raise ValueError(f"Unsupported FP8 backend: {self.fp8_backend}")
+        
+        return backend_configs[self.fp8_backend]()
     
-    def validate_dataset_config(self) -> bool:
-        """Validate dataset configuration"""
-        valid_formats = ["auto", "qwen", "llama"]
-        if self.format_style not in valid_formats:
-            raise ValueError(f"Invalid format_style: {self.format_style}. Must be one of {valid_formats}")
-        return True
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert config to dictionary for logging"""
+        return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
+    
+    @classmethod
+    def from_dict(cls, config_dict: Dict[str, Any]) -> 'TrainingConfig':
+        """Create config from dictionary"""
+        return cls(**config_dict)
+    
+    def validate(self) -> None:
+        """Validate configuration parameters"""
+        assert self.num_epochs > 0, "num_epochs must be positive"
+        assert self.batch_size > 0, "batch_size must be positive"
+        assert self.learning_rate > 0, "learning_rate must be positive"
+        assert self.max_length > 0, "max_length must be positive"
+        assert 0 <= self.warmup_ratio <= 1, "warmup_ratio must be between 0 and 1"
+        assert self.mixed_precision in ["no", "fp16", "bf16", "fp8"], f"Invalid mixed_precision: {self.mixed_precision}"
+        
+        if self.mixed_precision == "fp8":
+            assert self.fp8_backend in ["te", "msamp", "ao"], f"Invalid fp8_backend: {self.fp8_backend}"
