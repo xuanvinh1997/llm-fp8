@@ -236,7 +236,33 @@ class Trainer:
         
         # Setup components
         model, tokenizer = ModelManager.setup_model_and_tokenizer(self.config)
-        train_dataset = InstructionDataset(self.config.dataset_path, tokenizer, self.config.max_length)
+        from datasets import load_dataset
+        train_dataset = load_dataset(self.config.dataset_path, split='train')
+
+        # tokenize
+        def tokenize_function(examples):
+            messages = [[
+                {"role": "user", "content": problem},
+                {"role": "assistant", "content": solution}
+            ] for problem, solution in zip(examples["problem"], examples["generated_solution"])]
+            formatted_texts = tokenizer.apply_chat_template(
+                messages, add_generation_prompt=False, tokenize=False
+            )
+            tokenized = tokenizer(
+                formatted_texts, max_length=self.config.max_length, truncation=True,
+                padding="max_length", return_tensors="pt"
+            )
+            tokenized["labels"] = tokenized["input_ids"].clone()
+
+            return tokenized
+
+        train_dataset = train_dataset.map(
+            tokenize_function,
+            batched=True,
+            # remove_columns=["problem", "solution"],
+            desc="Tokenizing dataset",
+            num_proc=self.config.dataloader_num_workers,
+        )
         
         data_collator = DataCollatorForSeq2Seq(
             tokenizer=tokenizer, model=model, padding=True, return_tensors="pt"
