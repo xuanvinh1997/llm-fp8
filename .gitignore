@@ -9,3 +9,4 @@ venv/
 *.safetensors
 storm/
 arxiv*
+.ipynb_checkpoints/

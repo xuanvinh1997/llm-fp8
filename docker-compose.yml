@@ -1,0 +1,23 @@
+services:
+  training-fp8:
+    build: .
+    container_name: training-fp8
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - .:/workspace
+    ports:
+      - "8888:8888"
+    # gpus
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+
+
+    
