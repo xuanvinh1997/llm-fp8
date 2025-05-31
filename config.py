@@ -1,4 +1,4 @@
-from accelerate.utils import FP8RecipeKwargs
+from accelerate.utils import MSAMPRecipeKwargs, TERecipeKwargs, AORecipeKwargs
 from dataclasses import dataclass, field
 from typing import Optional, Tuple, Dict, Any
 
@@ -57,14 +57,13 @@ class TrainingConfig:
     seed: int = 42
     resume_from_checkpoint: Optional[str] = None
     
-    def get_fp8_kwargs(self) -> Optional[FP8RecipeKwargs]:
+    def get_fp8_kwargs(self) -> Optional[Any]:
         """Get FP8 recipe kwargs based on backend configuration"""
         if self.mixed_precision != "fp8":
             return None
             
         backend_configs = {
-            "te": lambda: FP8RecipeKwargs(
-                backend="te",
+            "te": lambda: TERecipeKwargs(
                 fp8_format=self.te_fp8_format,
                 amax_history_len=self.te_amax_history_len,
                 amax_compute_algo=self.te_amax_compute_algo,
@@ -73,11 +72,10 @@ class TrainingConfig:
                 override_linear_precision=self.te_override_linear_precision,
                 use_autocast_during_eval=self.te_use_autocast_during_eval
             ),
-            "msamp": lambda: FP8RecipeKwargs(
-                backend="msamp",
+            "msamp": lambda: MSAMPRecipeKwargs(
                 opt_level=self.msamp_opt_level
             ),
-            "ao": lambda: FP8RecipeKwargs(backend="ao")
+            "ao": lambda: AORecipeKwargs()
         }
         
         if self.fp8_backend not in backend_configs:

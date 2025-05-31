@@ -16,6 +16,8 @@ from torch.utils.data import DataLoader
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed, ProjectConfiguration
+from accelerate.utils import MSAMPRecipeKwargs, TERecipeKwargs,AORecipeKwargs
+
 from transformers import (
     DataCollatorForSeq2Seq,
     AutoModelForCausalLM,
@@ -229,17 +231,6 @@ class Trainer:
         self.logger.info(f"Batch Size: {self.config.batch_size}")
         self.logger.info(f"Learning Rate: {self.config.learning_rate}")
         self.logger.info("=" * 30)
-
-    def _safe_clip_grad_norm(self, parameters, max_norm, norm_type=2):
-        """Safe gradient clipping that handles None gradients properly"""
-        # Filter out parameters with None gradients
-        parameters_with_grad = [p for p in parameters if p.grad is not None]
-        
-        if len(parameters_with_grad) == 0:
-            return torch.tensor(0.)
-        
-        # Use torch.nn.utils.clip_grad_norm_ on filtered parameters
-        return torch.nn.utils.clip_grad_norm_(parameters_with_grad, max_norm, norm_type=norm_type)
          
     def train(self):
         """Main training loop with automatic FP8 handling"""
@@ -310,11 +301,11 @@ class Trainer:
                     loss = LossManager.compute_loss(outputs.logits, batch["labels"], batch["attention_mask"])
                     
                     self.accelerator.backward(loss)
-                     # Safe gradient clipping that handles None gradients
+                    
+                    # Fixed gradient clipping - use accelerator's method properly
                     if self.accelerator.sync_gradients:
-                        # grad_norm = self._safe_clip_grad_norm(model.parameters(), 1.0)
                         self.accelerator.unscale_gradients(optimizer)
-                        self.accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                        grad_norm = self.accelerator.clip_grad_norm_(model.parameters(), 1.0)
                         if self.config.use_wandb and global_step % self.config.logging_steps == 0:
                             self.accelerator.log({"train/grad_norm": grad_norm}, step=global_step)
                     
