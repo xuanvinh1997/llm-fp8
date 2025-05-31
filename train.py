@@ -123,24 +123,24 @@ def apply_preset(args: argparse.Namespace) -> None:
     """Apply configuration presets to override default values"""
     if args.preset == 'bf16':
         args.mixed_precision = "bf16"
-        args.batch_size = 4
+        # args.batch_size = 4
         args.gradient_accumulation_steps = 8
     elif args.preset == 'fp8_te':
         args.mixed_precision = "fp8"
         args.fp8_backend = "te"
         args.te_fp8_format = "HYBRID"
-        args.batch_size = 8
+        # args.batch_size = 8
         args.gradient_accumulation_steps = 4
     elif args.preset == 'fp8_msamp':
         args.mixed_precision = "fp8"
         args.fp8_backend = "msamp"
         args.msamp_opt_level = "O2"
-        args.batch_size = 8
+        # args.batch_size = 8
         args.gradient_accumulation_steps = 4
     elif args.preset == 'fp8_ao':
         args.mixed_precision = "fp8"
         args.fp8_backend = "ao"
-        args.batch_size = 8
+        # args.batch_size = 8
         args.gradient_accumulation_steps = 4
 
 
@@ -229,7 +229,18 @@ class Trainer:
         self.logger.info(f"Batch Size: {self.config.batch_size}")
         self.logger.info(f"Learning Rate: {self.config.learning_rate}")
         self.logger.info("=" * 30)
-            
+
+    def _safe_clip_grad_norm(self, parameters, max_norm, norm_type=2):
+        """Safe gradient clipping that handles None gradients properly"""
+        # Filter out parameters with None gradients
+        parameters_with_grad = [p for p in parameters if p.grad is not None]
+        
+        if len(parameters_with_grad) == 0:
+            return torch.tensor(0.)
+        
+        # Use torch.nn.utils.clip_grad_norm_ on filtered parameters
+        return torch.nn.utils.clip_grad_norm_(parameters_with_grad, max_norm, norm_type=norm_type)
+         
     def train(self):
         """Main training loop with automatic FP8 handling"""
         set_seed(self.config.seed)
@@ -299,8 +310,13 @@ class Trainer:
                     loss = LossManager.compute_loss(outputs.logits, batch["labels"], batch["attention_mask"])
                     
                     self.accelerator.backward(loss)
+                     # Safe gradient clipping that handles None gradients
                     if self.accelerator.sync_gradients:
+                        # grad_norm = self._safe_clip_grad_norm(model.parameters(), 1.0)
+                        self.accelerator.unscale_gradients(optimizer)
                         self.accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                        if self.config.use_wandb and global_step % self.config.logging_steps == 0:
+                            self.accelerator.log({"train/grad_norm": grad_norm}, step=global_step)
                     
                     optimizer.step()
                     scheduler.step()
