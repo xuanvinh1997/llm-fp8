@@ -1,4 +1,4 @@
-FROM ghcr.io/azure/msamp:main-cuda12.2
+FROM nvidia/cuda:12.2.2-devel-ubuntu22.04
 
 WORKDIR /workspace
 
@@ -6,40 +6,24 @@ WORKDIR /workspace
 RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-dev \
-    git \
-    openssh-server \
-    sudo \
-    && rm -rf /var/lib/apt/lists/*
+    cmake \
+    git
 
-# Install Python packages
-COPY requirements.txt /workspace/requirements.txt
-RUN pip3 install -r requirements.txt
+# Install pytorch 2.1.2
+RUN git clone --branch v2.1.2 https://github.com/pytorch/pytorch.git
+RUN cd pytorch && \
+    git submodule update --init --recursive && \
+    pip3 install -r requirements.txt
+RUN pip install "numpy<2.0" && cd pytorch && python3 setup.py install
 
-# Install jupyterlab
-RUN pip3 install jupyterlab
+# MSAMP
+RUN git clone https://github.com/Azure/MS-AMP.git && cd MS-AMP && git submodule update --init --recursive
 
-# Set up SSH for Vast.ai
-RUN mkdir /var/run/sshd
-RUN echo 'root:vastai' | chpasswd
-RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
-RUN sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+#set cuda home
+ENV CUDA_HOME=/usr/local/cuda-12.2
+# Install MSAMP dependencies
+RUN cd MS-AMP/third_party/msccl && \
+    make -j src.build NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90" \
+    && make pkg.debian.build && dpkg -i build/pkg/deb/libnccl2_*.deb && dpkg -i build/pkg/deb/libnccl-dev_2*.deb
 
-# Set up jupyterlab
-RUN mkdir -p /workspace/notebooks
-
-# Create startup script
-RUN echo '#!/bin/bash\n\
-# Start SSH daemon\n\
-service ssh start\n\
-\n\
-# Start Jupyter Lab\n\
-jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token="" --ServerApp.token="" --ServerApp.password="" &\n\
-\n\
-# Keep container running\n\
-tail -f /dev/null' > /start.sh && chmod +x /start.sh
-
-# Expose ports
-EXPOSE 22 8888
-
-# Use the startup script
-CMD ["/start.sh"]
+RUN cd MS-AMP && pip3 install -e . && make postinstall
