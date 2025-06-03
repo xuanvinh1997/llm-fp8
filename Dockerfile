@@ -14,7 +14,7 @@ RUN git clone --branch v2.1.2 https://github.com/pytorch/pytorch.git
 RUN cd pytorch && \
     git submodule update --init --recursive && \
     pip3 install -r requirements.txt
-RUN pip install "numpy<2.0" && cd pytorch && python3 setup.py install
+RUN pip install "numpy<2.0" && cd pytorch && TORCH_CUDA_ARCH_LIST="8.6;9.0" python3 setup.py install
 
 # MSAMP
 RUN git clone https://github.com/Azure/MS-AMP.git && cd MS-AMP && git submodule update --init --recursive
