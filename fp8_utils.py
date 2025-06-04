@@ -21,7 +21,8 @@ def get_dataloaders(model_name: str, batch_size: int = 16):
 
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B-Instruct")
     tokenized_datasets = load_dataset("nvidia/OpenMathInstruct-2", split="train")
-    
+    # select 1% of the dataset for testing
+    tokenized_datasets = tokenized_datasets.select(range(0, int(len(tokenized_datasets) * 0.01)))
     def tokenize_function(examples):
         # max_length=None => use the model max length (it's actually the default)
         # apply chat template to the examples
@@ -31,7 +32,7 @@ def get_dataloaders(model_name: str, batch_size: int = 16):
         ):
             # Use the chat template
             inputs.append(
-                 tokenizer.apply_chat_template(
+                tokenizer.apply_chat_template(
                     [
                         {
                             "role": "user",
@@ -43,11 +44,10 @@ def get_dataloaders(model_name: str, batch_size: int = 16):
                         },
                     ],
                     add_generation_prompt=False,
-                    return_tensors="pt",
-                    max_length=2048,
-                    return_dict=True,
+                    tokenize=False
             ))
-        outputs = tokenizer(inputs, padding="max_length", max_length=2048, truncation=True, return_tensors="pt")
+        # Remove return_tensors="pt" to keep as lists for later padding
+        outputs = tokenizer(inputs, padding="max_length", max_length=2048, truncation=True)
         return outputs
 
     # # Apply the method we just defined to all the examples in all the splits of the dataset
@@ -55,24 +55,36 @@ def get_dataloaders(model_name: str, batch_size: int = 16):
     tokenized_datasets = tokenized_datasets.map(
         tokenize_function,
         batched=True,
-        remove_columns=["idx", "problem", "generated_solution"],
+        remove_columns=["problem_source", "expected_answer"],
         desc="Tokenizing dataset",
         num_proc=32,  # Adjust based on your CPU cores
     )
-
+    # add labels to the dataset
+    tokenized_datasets = tokenized_datasets.map(
+        lambda x: {"labels": x["input_ids"]},
+        remove_columns=["generated_solution"],
+        desc="Adding labels",
+    )
     # # We also rename the 'label' column to 'labels' which is the expected name for labels by the models of the
     # # transformers library
     # tokenized_datasets = tokenized_datasets.rename_column("label", "labels")
 
     def collate_fn(examples):
-        return tokenizer.pad(
-            examples,
-            padding="max_length",
-            max_length=2048,  # Add explicit max length
-            # truncation=True,
-            # pad_to_multiple_of=16,
-            return_tensors="pt",
+        """
+        Custom collate function to handle padding and conversion to tensors.
+        """
+        # Convert input_ids and attention_mask to tensors
+        input_ids = torch.tensor([ex["input_ids"] for ex in examples], dtype=torch.int64)
+        attention_mask = torch.tensor(
+            [ex["attention_mask"] for ex in examples], dtype=torch.int64
         )
+        labels = torch.tensor([ex["labels"] for ex in examples], dtype=torch.int64)
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels,
+        }
 
     # split the dataset into train and validation sets
     tokenized_datasets = tokenized_datasets.train_test_split(test_size=0.2, seed=42)
@@ -107,7 +119,7 @@ def get_training_utilities(model_name: str, batch_size: int = 16, accelerator=No
     """
     from torch.optim import AdamW
     from transformers import (
-        AutoModelForSequenceClassification,
+        AutoModelForCausalLM,
         get_linear_schedule_with_warmup,
     )
 
@@ -115,7 +127,7 @@ def get_training_utilities(model_name: str, batch_size: int = 16, accelerator=No
 
     if accelerator is None:
         accelerator = Accelerator()
-    model = AutoModelForSequenceClassification.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name)
     train_dataloader, eval_dataloader = get_dataloaders(model_name, batch_size)
     optimizer = AdamW(model.parameters(), lr=0.0001)
     lr_scheduler = get_linear_schedule_with_warmup(

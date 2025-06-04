@@ -240,7 +240,7 @@ class Trainer:
         model, tokenizer = ModelManager.setup_model_and_tokenizer(self.config)
         from datasets import load_dataset
         train_dataset = load_dataset(self.config.dataset_path, split='tokenized')
-
+        train_dataset = train_dataset.select(10) # for testing
         # # tokenize
         # def tokenize_function(examples):
         #     messages = [[
