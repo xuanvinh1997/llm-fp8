@@ -14,409 +14,373 @@ from transformers import (
     AutoTokenizer,
     get_linear_schedule_with_warmup,
     DataCollatorForSeq2Seq,
-)
-from tqdm import tqdm
-
-from accelerate import Accelerator
-from accelerate.utils import (
-    FP8RecipeKwargs,
-    set_seed,
+    AutoModelForCausalLM,
+    AutoTokenizer
 )
 
-# Wandb import (optional)
-try:
-    import wandb
-    WANDB_AVAILABLE = True
-except ImportError:
-    WANDB_AVAILABLE = False
-    wandb = None
+from config import TrainingConfig
+from dataset import InstructionDataset
+from loss import LossManager
+from model import ModelManager
+from optimizer import OptimizerManager
 
-# Set up logging
+# Configure standard logging for pre-accelerator initialization
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def setup_qwen_model_and_tokenizer(model_name: str):
-    """Setup Qwen model and tokenizer with proper chat formatting"""
-    logger.info(f"Loading Qwen model: {model_name}")
-    
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_name,
-        trust_remote_code=True,
-        padding_side="right"
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments with comprehensive options"""
+    parser = argparse.ArgumentParser(
+        description="Fine-tune language models with FP8 precision support",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     
-    # Qwen models have special tokens, ensure pad token is set
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    # Model and data arguments
+    model_group = parser.add_argument_group('Model and Data')
+    model_group.add_argument('--model_name', type=str, default="Qwen/Qwen2.5-Math-1.5B-Instruct",
+                            help='HuggingFace model ID or local path')
+    model_group.add_argument('--tokenizer_name', type=str, default=None,
+                            help='Tokenizer name (defaults to model_name)')
+    model_group.add_argument('--dataset_path', type=str, required=True,
+                            help='Path to instruction dataset (JSON file or HF dataset ID)')
+    model_group.add_argument('--output_dir', type=str, default="outputs/trained_model",
+                            help='Output directory for trained model')
     
-    # Load model
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=True,
-        use_cache=False,  # Disable for training
+    # Training hyperparameters
+    train_group = parser.add_argument_group('Training Hyperparameters')
+    train_group.add_argument('--num_epochs', type=int, default=3,
+                            help='Number of training epochs')
+    train_group.add_argument('--batch_size', type=int, default=4,
+                            help='Training batch size per device')
+    train_group.add_argument('--gradient_accumulation_steps', type=int, default=8,
+                            help='Gradient accumulation steps')
+    train_group.add_argument('--learning_rate', type=float, default=2e-5,
+                            help='Peak learning rate')
+    train_group.add_argument('--weight_decay', type=float, default=0.01,
+                            help='Weight decay coefficient')
+    train_group.add_argument('--max_length', type=int, default=2048,
+                            help='Maximum sequence length')
+    train_group.add_argument('--warmup_ratio', type=float, default=0.1,
+                            help='Warmup ratio for learning rate scheduler')
+    
+    # Precision and optimization
+    precision_group = parser.add_argument_group('Precision and Optimization')
+    precision_group.add_argument('--mixed_precision', type=str, default="bf16",
+                               choices=["no", "fp16", "bf16", "fp8"],
+                               help='Mixed precision training mode')
+    precision_group.add_argument('--fp8_backend', type=str, default="te",
+                               choices=["te", "msamp", "ao"],
+                               help='FP8 backend (only used with --mixed_precision=fp8)')
+    precision_group.add_argument('--te_fp8_format', type=str, default="HYBRID",
+                               choices=["E4M3", "E5M2", "HYBRID"],
+                               help='TransformersEngine FP8 format')
+    precision_group.add_argument('--msamp_opt_level', type=str, default="O2",
+                               choices=["O1", "O2"],
+                               help='MS-AMP optimization level')
+    precision_group.add_argument('--gradient_checkpointing', action='store_true', default=True,
+                               help='Enable gradient checkpointing')
+    
+    # System and performance
+    system_group = parser.add_argument_group('System and Performance')
+    system_group.add_argument('--dataloader_num_workers', type=int, default=4,
+                            help='Number of dataloader workers')
+    system_group.add_argument('--seed', type=int, default=42,
+                            help='Random seed for reproducibility')
+    system_group.add_argument('--resume_from_checkpoint', type=str, default=None,
+                            help='Resume training from checkpoint path')
+    
+    # Logging and monitoring
+    logging_group = parser.add_argument_group('Logging and Monitoring')
+    logging_group.add_argument('--logging_steps', type=int, default=10,
+                             help='Log every N training steps')
+    logging_group.add_argument('--save_steps', type=int, default=500,
+                             help='Save checkpoint every N steps')
+    logging_group.add_argument('--eval_steps', type=int, default=500,
+                             help='Evaluate every N steps')
+    logging_group.add_argument('--save_total_limit', type=int, default=3,
+                             help='Maximum number of checkpoints to keep')
+    logging_group.add_argument('--use_wandb', action='store_true',
+                             help='Enable Weights & Biases logging')
+    logging_group.add_argument('--wandb_project', type=str, default="llm-instruction-tuning",
+                             help='W&B project name')
+    logging_group.add_argument('--wandb_run_name', type=str, default=None,
+                             help='W&B run name')
+    
+    # Presets for common configurations
+    preset_group = parser.add_argument_group('Configuration Presets')
+    preset_group.add_argument('--preset', type=str, choices=['bf16', 'fp8_te', 'fp8_msamp', 'fp8_ao'],
+                            help='Use predefined configuration preset')
+    
+    return parser.parse_args()
+
+
+def apply_preset(args: argparse.Namespace) -> None:
+    """Apply configuration presets to override default values"""
+    if args.preset == 'bf16':
+        args.mixed_precision = "bf16"
+        # args.batch_size = 4
+        args.gradient_accumulation_steps = 8
+    elif args.preset == 'fp8_te':
+        args.mixed_precision = "fp8"
+        args.fp8_backend = "te"
+        args.te_fp8_format = "HYBRID"
+        # args.batch_size = 8
+        args.gradient_accumulation_steps = 4
+    elif args.preset == 'fp8_msamp':
+        args.mixed_precision = "fp8"
+        args.fp8_backend = "msamp"
+        args.msamp_opt_level = "O2"
+        # args.batch_size = 8
+        args.gradient_accumulation_steps = 4
+    elif args.preset == 'fp8_ao':
+        args.mixed_precision = "fp8"
+        args.fp8_backend = "ao"
+        # args.batch_size = 8
+        args.gradient_accumulation_steps = 4
+
+
+def args_to_config(args: argparse.Namespace) -> TrainingConfig:
+    """Convert command line arguments to TrainingConfig"""
+    return TrainingConfig(
+        model_name=args.model_name,
+        tokenizer_name=args.tokenizer_name or args.model_name,
+        dataset_path=args.dataset_path,
+        output_dir=args.output_dir,
+        num_epochs=args.num_epochs,
+        batch_size=args.batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        max_length=args.max_length,
+        warmup_ratio=args.warmup_ratio,
+        mixed_precision=args.mixed_precision,
+        fp8_backend=args.fp8_backend,
+        te_fp8_format=args.te_fp8_format,
+        msamp_opt_level=args.msamp_opt_level,
+        gradient_checkpointing=args.gradient_checkpointing,
+        dataloader_num_workers=args.dataloader_num_workers,
+        logging_steps=args.logging_steps,
+        save_steps=args.save_steps,
+        eval_steps=args.eval_steps,
+        save_total_limit=args.save_total_limit,
+        use_wandb=args.use_wandb,
+        wandb_project=args.wandb_project,
+        wandb_run_name=args.wandb_run_name,
+        seed=args.seed,
+        resume_from_checkpoint=args.resume_from_checkpoint
     )
-    
-    # Resize token embeddings if needed
-    model.resize_token_embeddings(len(tokenizer))
-    
-    logger.info(f"Model loaded with {model.num_parameters():,} parameters")
-    
-    return model, tokenizer
 
 
-def evaluate_math_model(model, eval_dataloader, accelerator):
-    """Evaluate the model on math problems"""
-    model.eval()
-    total_loss = 0
-    num_batches = 0
+class Trainer:
+    """Main training class with official FP8 support"""
     
-    with torch.no_grad():
-        for batch in tqdm(eval_dataloader, desc="Evaluating", disable=not accelerator.is_local_main_process):
-            outputs = model(**batch)
-            loss = outputs.loss
-            
-            # Gather losses from all processes
-            all_losses = accelerator.gather(loss.repeat(batch["input_ids"].shape[0]))
-            total_loss += all_losses.mean().item()
-            num_batches += 1
-    
-    avg_loss = total_loss / num_batches if num_batches > 0 else 0
-    perplexity = torch.exp(torch.tensor(avg_loss)).item()
-    
-    return {"eval_loss": avg_loss, "eval_perplexity": perplexity}
-
-
-def save_model_and_config(model, tokenizer, accelerator: Accelerator, output_dir, args):
-    """Save model, tokenizer, and training config (FP8-compatible)"""
-    accelerator.wait_for_everyone()
-    
-    if accelerator.is_main_process:
-        os.makedirs(output_dir, exist_ok=True)
-        accelerator.save_model(model, output_dir)
-        # Save tokenizer
-        tokenizer.save_pretrained(output_dir)
-        # Save training arguments
-        with open(os.path.join(output_dir, "training_args.json"), "w") as f:
-            json.dump(vars(args), f, indent=2)
+    def __init__(self, config: TrainingConfig):
+        self.config = config
+        self._setup_accelerator()
+        self._setup_logging()
+        self.logger = get_logger(__name__)
+        self._log_config()
         
-        logger.info(f"Tokenizer and config saved to {output_dir}")
-
-
-def initialize_wandb(args, accelerator, model, num_training_steps):
-    """Initialize Weights & Biases logging"""
-    if not WANDB_AVAILABLE:
-        logger.warning("wandb not available. Install with: pip install wandb")
-        return False
-    
-    if not args.use_wandb:
-        return False
-    
-    # Only initialize on main process
-    if accelerator.is_main_process:
-        # Create wandb config
-        wandb_config = {
-            # Model config
-            "model_name": args.model_name,
-            "model_parameters": model.num_parameters(),
-            
-            # Training config
-            "batch_size": args.batch_size,
-            "gradient_accumulation_steps": args.gradient_accumulation_steps,
-            "effective_batch_size": args.batch_size * args.gradient_accumulation_steps * accelerator.num_processes,
-            "learning_rate": args.learning_rate,
-            "num_epochs": args.num_epochs,
-            "warmup_steps": args.warmup_steps,
-            "weight_decay": args.weight_decay,
-            "max_length": args.max_length,
-            "num_training_steps": num_training_steps,
-            
-            # FP8 config
-            "fp8_backend": args.fp8_backend,
-            "msamp_opt_level": args.msamp_opt_level,
-            "te_fp8_format": args.te_fp8_format,
-            
-            # Dataset config
-            "dataset_name": args.dataset_name,
-            "max_samples": args.max_samples,
-            "solution_field": args.solution_field,
-            
-            # System config
-            "num_processes": accelerator.num_processes,
-            "mixed_precision": str(accelerator.mixed_precision),
-            "seed": args.seed,
-        }
-        
-        wandb.init(
-            project=args.wandb_project,
-            name=args.wandb_run_name,
-            entity=args.wandb_entity,
-            config=wandb_config,
-            tags=args.wandb_tags,
-            notes=args.wandb_notes,
-            resume="allow" if args.wandb_resume else None,
+    def _setup_accelerator(self):
+        """Initialize Accelerator with official FP8 support"""
+        project_config = ProjectConfiguration(
+            project_dir=self.config.output_dir,
+            logging_dir=str(Path(self.config.output_dir) / "logs")
         )
         
-        # Watch model (optional, can be memory intensive)
-        if args.wandb_watch_model:
-            wandb.watch(model, log="all", log_freq=args.wandb_watch_freq)
+        kwarg_handlers = []
+        if self.config.mixed_precision == "fp8":
+            fp8_kwargs = self.config.get_fp8_kwargs()
+            if fp8_kwargs:
+                kwarg_handlers.append(fp8_kwargs)
+                std_logger.info(f"FP8 enabled with {self.config.fp8_backend} backend")
         
-        logger.info(f"Initialized wandb project: {args.wandb_project}")
-        return True
+        self.accelerator = Accelerator(
+            gradient_accumulation_steps=self.config.gradient_accumulation_steps,
+            mixed_precision=self.config.mixed_precision,
+            project_config=project_config,
+            log_with="wandb" if self.config.use_wandb else None,
+            kwargs_handlers=kwarg_handlers
+        )
+        
+    def _setup_logging(self):
+        """Setup logging and monitoring"""
+        if self.config.use_wandb and self.accelerator.is_main_process:
+            self.accelerator.init_trackers(
+                project_name=self.config.wandb_project,
+                config=self.config.__dict__,
+                init_kwargs={"wandb": {"name": self.config.wandb_run_name}}
+            )
     
-    return False
+    def _log_config(self):
+        """Log training configuration"""
+        self.logger.info("=== Training Configuration ===")
+        self.logger.info(f"Model: {self.config.model_name}")
+        self.logger.info(f"Dataset: {self.config.dataset_path}")
+        self.logger.info(f"Output: {self.config.output_dir}")
+        self.logger.info(f"Precision: {self.config.mixed_precision}")
+        if self.config.mixed_precision == "fp8":
+            self.logger.info(f"FP8 Backend: {self.config.fp8_backend}")
+        self.logger.info(f"Batch Size: {self.config.batch_size}")
+        self.logger.info(f"Learning Rate: {self.config.learning_rate}")
+        self.logger.info("=" * 30)
+         
+    def train(self):
+        """Main training loop with automatic FP8 handling"""
+        set_seed(self.config.seed)
+        
+        # Setup components
+        model, tokenizer = ModelManager.setup_model_and_tokenizer(self.config)
+        from datasets import load_dataset
+        train_dataset = load_dataset(self.config.dataset_path, split='tokenized')
+        train_dataset = train_dataset.select(10) # for testing
+        # # tokenize
+        # def tokenize_function(examples):
+        #     messages = [[
+        #         {"role": "user", "content": problem},
+        #         {"role": "assistant", "content": solution}
+        #     ] for problem, solution in zip(examples["problem"], examples["generated_solution"])]
+        #     formatted_texts = tokenizer.apply_chat_template(
+        #         messages, add_generation_prompt=False, tokenize=False
+        #     )
+        #     tokenized = tokenizer(
+        #         formatted_texts, max_length=self.config.max_length, truncation=True,
+        #         padding="max_length", return_tensors="pt"
+        #     )
+        #     tokenized["labels"] = tokenized["input_ids"].clone()
 
+        #     return tokenized
 
-def log_metrics(metrics: Dict, step: int, prefix: str = "train", use_wandb: bool = False):
-    """Log metrics to wandb if available"""
-    if use_wandb and WANDB_AVAILABLE and wandb.run is not None:
-        wandb_metrics = {f"{prefix}/{k}": v for k, v in metrics.items()}
-        wandb_metrics["step"] = step
-        wandb.log(wandb_metrics, step=step)
+        # train_dataset = train_dataset.map(
+        #     tokenize_function,
+        #     batched=True,
+        #     # remove_columns=["problem", "solution"],
+        #     desc="Tokenizing dataset",
+        #     num_proc=self.config.dataloader_num_workers,
+        # )
+        
+        data_collator = DataCollatorForSeq2Seq(
+            tokenizer=tokenizer, model=model, padding=True, return_tensors="pt"
+        )
+        
+        train_dataloader = DataLoader(
+            train_dataset, batch_size=self.config.batch_size, shuffle=True,
+            collate_fn=data_collator, num_workers=self.config.dataloader_num_workers, pin_memory=True
+        )
+        
+        optimizer = OptimizerManager.setup_optimizer(model, self.config)
+        num_training_steps = len(train_dataloader) * self.config.num_epochs
+        scheduler = OptimizerManager.setup_scheduler(optimizer, num_training_steps, self.config)
+        
+        # Prepare for training
+        model, optimizer, train_dataloader, scheduler = self.accelerator.prepare(
+            model, optimizer, train_dataloader, scheduler
+        )
+        
+        # Training info
+        self.logger.info(f"Starting training: {len(train_dataset)} examples, {self.config.num_epochs} epochs")
+        if self.config.mixed_precision == "fp8":
+            self.logger.info("FP8 training active - Accelerate handles precision automatically")
+        
+        # Training loop
+        global_step = 0
+        for epoch in range(self.config.num_epochs):
+            model.train()
+            total_loss = 0
+            
+            for step, batch in enumerate(train_dataloader):
+                with self.accelerator.accumulate(model):
+                    outputs = model(**batch)
+                    loss = LossManager.compute_loss(outputs.logits, batch["labels"], batch["attention_mask"])
+                    
+                    self.accelerator.backward(loss)
+                    
+                    # Fixed gradient clipping - use accelerator's method properly
+                    if self.accelerator.sync_gradients:
+                        self.accelerator.unscale_gradients(optimizer)
+                        grad_norm = self.accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                        if self.config.use_wandb and global_step % self.config.logging_steps == 0:
+                            self.accelerator.log({"train/grad_norm": grad_norm}, step=global_step)
+                    
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad()
+                
+                total_loss += loss.detach().float()
+                
+                # Logging and checkpointing
+                if global_step % self.config.logging_steps == 0:
+                    self._log_metrics(epoch, global_step, total_loss / (step + 1), scheduler.get_last_lr()[0])
+                
+                if global_step % self.config.save_steps == 0 and global_step > 0:
+                    self._save_checkpoint(model, tokenizer, global_step)
+                
+                global_step += 1
+            
+            avg_epoch_loss = total_loss / len(train_dataloader)
+            self.logger.info(f"Epoch {epoch} completed. Average loss: {avg_epoch_loss:.4f}")
+        
+        self._save_final_model(model, tokenizer)
+        if self.config.use_wandb:
+            self.accelerator.end_training()
+    
+    def _log_metrics(self, epoch: int, step: int, loss: float, lr: float):
+        """Log training metrics"""
+        self.logger.info(f"Epoch {epoch}, Step {step}: Loss = {loss:.4f}, LR = {lr:.2e}")
+        
+        if self.config.use_wandb:
+            logs = {
+                "train/loss": loss, "train/learning_rate": lr, "train/epoch": epoch,
+                "train/precision": self.config.mixed_precision
+            }
+            if self.config.mixed_precision == "fp8":
+                logs[f"train/fp8_backend"] = self.config.fp8_backend
+            self.accelerator.log(logs, step=step)
+    
+    def _save_checkpoint(self, model, tokenizer, step: int):
+        """Save training checkpoint"""
+        output_dir = Path(self.config.output_dir) / f"checkpoint-{step}"
+        self.accelerator.save_state(output_dir)
+        if self.accelerator.is_main_process:
+            tokenizer.save_pretrained(output_dir)
+            self.logger.info(f"Checkpoint saved to {output_dir}")
+    
+    def _save_final_model(self, model, tokenizer):
+        """Save final trained model"""
+        self.accelerator.wait_for_everyone()
+        unwrapped_model = self.accelerator.unwrap_model(model)
+        
+        if self.accelerator.is_main_process:
+            unwrapped_model.save_pretrained(
+                self.config.output_dir, save_function=self.accelerator.save,
+                is_main_process=self.accelerator.is_main_process
+            )
+            tokenizer.save_pretrained(self.config.output_dir)
+            self.logger.info(f"Final model saved to {self.config.output_dir}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fine-tune Qwen2.5-3B on math dataset with FP8")
+    """Main entry point with argument parsing"""
+    args = parse_args()
     
-    # Model and data
-    parser.add_argument("--model_name", default="Qwen/Qwen2.5-3B", help="Qwen model name")
-    parser.add_argument("--dataset_name", default="nvidia/OpenMathInstruct-2", help="Math dataset")
-    parser.add_argument("--max_length", type=int, default=2048, help="Maximum sequence length")
-    parser.add_argument("--max_samples", type=int, default=None, help="Limit dataset size")
+    # Apply preset configurations if specified
+    if args.preset:
+        apply_preset(args)
+        std_logger.info(f"Applied preset: {args.preset}")
     
-    # Training
-    parser.add_argument("--batch_size", type=int, default=2, help="Training batch size")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=8, help="Gradient accumulation steps")
-    parser.add_argument("--learning_rate", type=float, default=2e-5, help="Learning rate")
-    parser.add_argument("--num_epochs", type=int, default=2, help="Number of training epochs")
-    parser.add_argument("--warmup_steps", type=int, default=200, help="Warmup steps")
-    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
+    # Convert arguments to config
+    config = args_to_config(args)
     
-    # FP8 Backend
-    parser.add_argument("--fp8_backend", choices=["msamp", "te", "torchao"], default="msamp", 
-                       help="FP8 backend to use")
+    # Create output directory
+    Path(config.output_dir).mkdir(parents=True, exist_ok=True)
     
-    # MS-AMP specific
-    parser.add_argument("--msamp_opt_level", choices=["O1", "O2", "O3"], default="O2",
-                       help="MS-AMP optimization level")
+    # Log startup info
+    std_logger.info(f"Initializing training with {config.mixed_precision} precision")
+    std_logger.info(f"Output directory: {config.output_dir}")
     
-    # TransformerEngine specific
-    parser.add_argument("--te_fp8_format", choices=["HYBRID", "E4M3", "E5M2"], default="HYBRID",
-                       help="TransformerEngine FP8 format")
-    parser.add_argument("--te_amax_history_len", type=int, default=32,
-                       help="TransformerEngine amax history length")
-    parser.add_argument("--te_amax_compute_algo", choices=["max", "most_recent"], default="max",
-                       help="TransformerEngine amax compute algorithm")
-    
-    # Math-specific
-    parser.add_argument("--use_generated_solution", action="store_true", default=True,
-                       help="Use generated_solution field instead of solution")
-    parser.add_argument("--solution_field", default="generated_solution",
-                       help="Which solution field to use")
-    
-    # I/O
-    parser.add_argument("--output_dir", default="./qwen_math_fp8_model", help="Output directory")
-    parser.add_argument("--save_steps", type=int, default=1000, help="Save checkpoint every N steps")
-    parser.add_argument("--eval_steps", type=int, default=500, help="Evaluate every N steps")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    
-    # Wandb arguments
-    parser.add_argument("--use_wandb", action="store_true", default=False,
-                       help="Enable Weights & Biases logging")
-    parser.add_argument("--wandb_project", default="qwen-math-fp8",
-                       help="Wandb project name")
-    parser.add_argument("--wandb_entity", default=None,
-                       help="Wandb entity (username or team)")
-    parser.add_argument("--wandb_run_name", default=None,
-                       help="Wandb run name (auto-generated if None)")
-    parser.add_argument("--wandb_tags", nargs="*", default=["fp8", "qwen", "math"],
-                       help="Wandb tags")
-    parser.add_argument("--wandb_notes", default="",
-                       help="Wandb run notes")
-    parser.add_argument("--wandb_resume", action="store_true", default=False,
-                       help="Resume wandb run if exists")
-    parser.add_argument("--wandb_watch_model", action="store_true", default=False,
-                       help="Watch model gradients/parameters (memory intensive)")
-    parser.add_argument("--wandb_watch_freq", type=int, default=1000,
-                       help="Frequency for watching model")
-    parser.add_argument("--wandb_log_freq", type=int, default=10,
-                       help="Frequency for logging training metrics")
-    
-    args = parser.parse_args()
-    training_args = MathTrainingArguments(**vars(args))
-    
-    # Set seed
-    set_seed(training_args.seed)
-    
-    # Setup accelerator with FP8
-    accelerator = Accelerator()
-    print(accelerator.mixed_precision)
-    
-    # Load model and tokenizer
-    model, tokenizer = setup_qwen_model_and_tokenizer(training_args.model_name)
-    
-    # Load and process math dataset
-    train_dataset, eval_dataset = load_and_process_math_dataset(
-        training_args.dataset_name,
-        tokenizer,
-        training_args.max_length,
-        training_args.max_samples
-    )
-    
-    # Create data collator
-    data_collator = DataCollatorForSeq2Seq(
-        tokenizer=tokenizer,
-        model=model,
-        padding=True,
-        pad_to_multiple_of=16,
-        return_tensors="pt",
-    )
-    
-    # Create dataloaders
-    train_dataloader = DataLoader(
-        train_dataset,
-        batch_size=training_args.batch_size,
-        shuffle=True,
-        collate_fn=data_collator,
-        drop_last=True,
-    )
-    
-    eval_dataloader = DataLoader(
-        eval_dataset,
-        batch_size=training_args.batch_size,
-        shuffle=False,
-        collate_fn=data_collator,
-        drop_last=False,
-    )
-    
-    # Setup optimizer and scheduler
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=training_args.learning_rate,
-        weight_decay=training_args.weight_decay,
-    )
-    
-    num_training_steps = len(train_dataloader) * training_args.num_epochs
-    lr_scheduler = get_linear_schedule_with_warmup(
-        optimizer=optimizer,
-        num_warmup_steps=training_args.warmup_steps,
-        num_training_steps=num_training_steps,
-    )
-    
-    # Initialize wandb
-    wandb_enabled = initialize_wandb(training_args, accelerator, model, num_training_steps)
-    
-    # Prepare with accelerator
-    model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
-    )
-    
-    # Training loop
-    logger.info("Starting training...")
-    logger.info(f"Total training steps: {num_training_steps}")
-    logger.info(f"Effective batch size: {training_args.batch_size * training_args.gradient_accumulation_steps * accelerator.num_processes}")
-    
-    model.train()
-    global_step = 0
-    total_loss = 0
-    
-    for epoch in range(training_args.num_epochs):
-        logger.info(f"Epoch {epoch + 1}/{training_args.num_epochs}")
-        
-        progress_bar = tqdm(
-            train_dataloader, 
-            desc=f"Training Epoch {epoch + 1}",
-            disable=not accelerator.is_local_main_process
-        )
-        
-        for step, batch in enumerate(progress_bar):
-            with accelerator.accumulate(model):
-                # Forward pass
-                outputs = model(**batch)
-                loss = outputs.loss
-                total_loss += loss.detach().item()
-                
-                # Backward pass
-                accelerator.backward(loss)
-                
-                # Optimizer step
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad()
-            
-            if accelerator.sync_gradients:
-                global_step += 1
-                
-                # Calculate metrics
-                avg_loss = total_loss / global_step
-                current_lr = lr_scheduler.get_last_lr()[0]
-                
-                # Update progress bar
-                progress_bar.set_postfix({
-                    "loss": f"{loss.item():.4f}",
-                    "avg_loss": f"{avg_loss:.4f}",
-                    "lr": f"{current_lr:.2e}",
-                })
-                
-                # Log training metrics to wandb
-                if wandb_enabled and accelerator.is_main_process and global_step % training_args.wandb_log_freq == 0:
-                    log_metrics({
-                        "loss": loss.item(),
-                        "avg_loss": avg_loss,
-                        "learning_rate": current_lr,
-                        "epoch": epoch + 1,
-                    }, global_step, "train", wandb_enabled)
-                
-                # Evaluation
-                if global_step % training_args.eval_steps == 0:
-                    eval_metrics = evaluate_math_model(model, eval_dataloader, accelerator)
-                    if accelerator.is_main_process:
-                        logger.info(f"Step {global_step}: {eval_metrics}")
-                        
-                        # Log evaluation metrics to wandb
-                        if wandb_enabled:
-                            log_metrics(eval_metrics, global_step, "eval", wandb_enabled)
-                    
-                    model.train()
-                
-                # Save checkpoint
-                if global_step % training_args.save_steps == 0:
-                    checkpoint_dir = os.path.join(training_args.output_dir, f"checkpoint-{global_step}")
-                    save_model_and_config(model, tokenizer, accelerator, checkpoint_dir, training_args)
-                    
-                    # Log checkpoint save to wandb
-                    if wandb_enabled and accelerator.is_main_process:
-                        log_metrics({"checkpoint_saved": 1}, global_step, "system", wandb_enabled)
-    
-    # Final evaluation
-    logger.info("Final evaluation...")
-    final_eval_metrics = evaluate_math_model(model, eval_dataloader, accelerator)
-    if accelerator.is_main_process:
-        logger.info(f"Final evaluation: {final_eval_metrics}")
-        
-        # Log final metrics to wandb
-        if wandb_enabled:
-            log_metrics(final_eval_metrics, global_step, "final", wandb_enabled)
-    
-    # Save final model
-    save_model_and_config(model, tokenizer, accelerator, training_args.output_dir, training_args)
-    
-    # Finish wandb run
-    if wandb_enabled and accelerator.is_main_process:
-        # Log final model artifact (optional)
-        if hasattr(training_args, 'wandb_log_model') and training_args.wandb_log_model:
-            artifact = wandb.Artifact(
-                name=f"qwen-math-model-{wandb.run.id}",
-                type="model",
-                description=f"Fine-tuned Qwen model on {training_args.dataset_name}"
-            )
-            artifact.add_dir(training_args.output_dir)
-            wandb.log_artifact(artifact)
-        
-        wandb.finish()
-    
-    logger.info("Training completed!")
+    # Initialize and run trainer
+    trainer = Trainer(config)
+    trainer.train()
 
 
 if __name__ == "__main__":
