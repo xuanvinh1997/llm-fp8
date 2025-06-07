@@ -13,17 +13,27 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MathTrainingArguments:
     """Training configuration for math instruction tuning"""
+    # Model and data
     model_name: str = "Qwen/Qwen2.5-3B-Instruct"
     dataset_name: str = "nvidia/OpenMathInstruct-2"
     max_length: int = 2048  # Longer for math solutions
+    max_samples: Optional[int] = None  # Limit dataset size for testing
+    
+    # Training hyperparameters
     batch_size: int = 2     # Smaller for 3B model
     gradient_accumulation_steps: int = 8  # Compensate for smaller batch
     learning_rate: float = 2e-5  # Conservative for math
     num_epochs: int = 2
     warmup_steps: int = 200
+    weight_decay: float = 0.01
+    seed: int = 42
+    
+    # Evaluation and saving
     save_steps: int = 1000
     eval_steps: int = 500
     output_dir: str = "./qwen_math_fp8_model"
+    
+    # FP8 configuration
     fp8_backend: str = "msamp"
     
     # MS-AMP specific
@@ -37,12 +47,19 @@ class MathTrainingArguments:
     # Math-specific settings
     use_generated_solution: bool = True  # Use generated_solution field
     solution_field: str = "generated_solution"  # or "solution"
-    max_samples: Optional[int] = None  # Limit dataset size for testing
     
-    # General training
-    seed: int = 42
-    weight_decay: float = 0.01
-    
+    # Weights & Biases configuration
+    use_wandb: bool = True  # Use Weights & Biases for logging
+    wandb_project: str = "qwen-math-instruct"
+    wandb_entity: str = "your_wandb_entity"  # Replace with your entity
+    wandb_run_name: Optional[str] = None  # Auto-generated if None
+    wandb_tags: Optional[List[str]] = None  # Will default to ["fp8", "qwen", "math"]
+    wandb_notes: str = ""
+    wandb_resume: bool = False
+    wandb_watch_model: bool = False  # Memory intensive
+    wandb_watch_freq: int = 1000
+    wandb_log_freq: int = 10
+    wandb_log_model: bool = False  # Log final model as artifact
 
 
 def clean_math_text(text):
@@ -58,8 +75,6 @@ def clean_math_text(text):
     text = re.sub(r'\$([^$]+)\$', r'$\1$', text)        # Inline math
     
     return text
-
-
 
 
 def load_and_process_math_dataset(dataset_name: str, tokenizer, max_length: int, max_samples: Optional[int] = None):
@@ -102,7 +117,8 @@ def load_and_process_math_dataset(dataset_name: str, tokenizer, max_length: int,
             formatted_examples.append({"text": formatted})
         else:
             skipped += 1
-        
+    
+    logger.info(f"Processed {len(formatted_examples)} examples, skipped {skipped}")
     
     if not formatted_examples:
         raise ValueError("No valid examples found in dataset!")
@@ -156,9 +172,9 @@ def format_math_problem(example):
         # Skip examples without solutions
         return None
     
-    # Format as instruction-following
+    # Format as instruction-following return result in \boxed{}
     formatted_text = f"""<|im_start|>system
-You are a helpful assistant that solves math problems step by step.<|im_end|>
+You are a helpful assistant that solves math problems step by step and returns the final answer in a \\boxed{{}} format.
 <|im_start|>user
 {problem}<|im_end|>
 <|im_start|>assistant
