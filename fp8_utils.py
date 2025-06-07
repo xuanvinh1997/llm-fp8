@@ -1,170 +1,183 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+from dataclasses import dataclass
+import re
 import torch
+from tqdm import tqdm
+from datasets import Dataset, load_dataset
+from typing import Optional, List
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@dataclass
+class MathTrainingArguments:
+    """Training configuration for math instruction tuning"""
+    # Model and data
+    model_name: str = "Qwen/Qwen2.5-3B-Instruct"
+    dataset_name: str = "nvidia/OpenMathInstruct-2"
+    max_length: int = 2048  # Longer for math solutions
+    max_samples: Optional[int] = None  # Limit dataset size for testing
+    
+    # Training hyperparameters
+    batch_size: int = 2     # Smaller for 3B model
+    gradient_accumulation_steps: int = 8  # Compensate for smaller batch
+    learning_rate: float = 2e-5  # Conservative for math
+    num_epochs: int = 2
+    warmup_steps: int = 200
+    weight_decay: float = 0.01
+    seed: int = 42
+    
+    # Evaluation and saving
+    save_steps: int = 1000
+    eval_steps: int = 500
+    output_dir: str = "./qwen_math_fp8_model"
+    
+    # FP8 configuration
+    fp8_backend: str = "msamp"
+    
+    # MS-AMP specific
+    msamp_opt_level: str = "O2"
+    
+    # TransformerEngine specific  
+    te_fp8_format: str = "HYBRID"
+    te_amax_history_len: int = 32
+    te_amax_compute_algo: str = "max"
+    
+    # Math-specific settings
+    use_generated_solution: bool = True  # Use generated_solution field
+    solution_field: str = "generated_solution"  # or "solution"
+    
+    # Weights & Biases configuration
+    use_wandb: bool = True  # Use Weights & Biases for logging
+    wandb_project: str = "qwen-math-instruct"
+    wandb_entity: str = "your_wandb_entity"  # Replace with your entity
+    wandb_run_name: Optional[str] = None  # Auto-generated if None
+    wandb_tags: Optional[List[str]] = None  # Will default to ["fp8", "qwen", "math"]
+    wandb_notes: str = ""
+    wandb_resume: bool = False
+    wandb_watch_model: bool = False  # Memory intensive
+    wandb_watch_freq: int = 1000
+    wandb_log_freq: int = 10
+    wandb_log_model: bool = False  # Log final model as artifact
 
 
-def get_dataloaders(model_name: str, batch_size: int = 16):
-    from datasets import load_dataset
-    from torch.utils.data import DataLoader
-    from transformers import AutoTokenizer
+def clean_math_text(text):
+    """Clean and normalize math text"""
+    if not text:
+        return ""
+    
+    # Remove extra whitespace
+    text = re.sub(r'\s+', ' ', text.strip())
+    
+    # Normalize LaTeX formatting
+    text = re.sub(r'\$\$([^$]+)\$\$', r'$$\1$$', text)  # Block math
+    text = re.sub(r'\$([^$]+)\$', r'$\1$', text)        # Inline math
+    
+    return text
 
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-Math-1.5B-Instruct")
-    tokenized_datasets = load_dataset("nvidia/OpenMathInstruct-2", split="train")
-    # select 1% of the dataset for testing
-    tokenized_datasets = tokenized_datasets.select(range(0, int(len(tokenized_datasets) * 0.01)))
+
+def load_and_process_math_dataset(dataset_name: str, tokenizer, max_length: int, max_samples: Optional[int] = None):
+    """Load and process the OpenMathInstruct-2 dataset"""
+    logger.info(f"Loading math dataset: {dataset_name}")
+    
+    try:
+        # Load the dataset
+        dataset = load_dataset(dataset_name, split='train')
+        
+        if max_samples:
+            dataset = dataset.select(range(min(max_samples, len(dataset))))
+            logger.info(f"Limited dataset to {len(dataset)} samples")
+        
+        logger.info(f"Dataset loaded with {len(dataset)} examples")
+        logger.info(f"Dataset columns: {dataset.column_names}")
+        
+        # Show sample
+        if len(dataset) > 0:
+            sample = dataset[0]
+            logger.info(f"Sample keys: {list(sample.keys())}")
+            if 'problem' in sample:
+                logger.info(f"Sample problem: {sample['problem'][:200]}...")
+            if 'generated_solution' in sample:
+                logger.info(f"Has generated_solution: {bool(sample['generated_solution'])}")
+            if 'solution' in sample:
+                logger.info(f"Has solution: {bool(sample['solution'])}")
+        
+    except Exception as e:
+        logger.error(f"Error loading dataset: {e}")
+        raise
+    
+    # Process and format examples
+    formatted_examples = []
+    skipped = 0
+    
+    for i, example in enumerate(tqdm(dataset, desc="Processing examples")):
+        formatted = format_math_problem(example)
+        if formatted:
+            formatted_examples.append({"text": formatted})
+        else:
+            skipped += 1
+    
+    logger.info(f"Processed {len(formatted_examples)} examples, skipped {skipped}")
+    
+    if not formatted_examples:
+        raise ValueError("No valid examples found in dataset!")
+    
+    # Create dataset from formatted examples
+    formatted_dataset = Dataset.from_list(formatted_examples)
+    
+    # Tokenize
     def tokenize_function(examples):
-        # max_length=None => use the model max length (it's actually the default)
-        # apply chat template to the examples
-        inputs = []
-        for problem, generated_solution in zip(
-            examples["problem"], examples["generated_solution"]
-        ):
-            # Use the chat template
-            inputs.append(
-                tokenizer.apply_chat_template(
-                    [
-                        {
-                            "role": "user",
-                            "content": problem,
-                        },
-                        {
-                            "role": "assistant",
-                            "content": generated_solution,
-                        },
-                    ],
-                    add_generation_prompt=False,
-                    tokenize=False
-            ))
-        # Remove return_tensors="pt" to keep as lists for later padding
-        outputs = tokenizer(inputs, padding="max_length", max_length=2048, truncation=True)
-        return outputs
-
-    # # Apply the method we just defined to all the examples in all the splits of the dataset
-    # # starting with the main process first:
-    tokenized_datasets = tokenized_datasets.map(
+        model_inputs = tokenizer(
+            examples["text"],
+            truncation=True,
+            padding=False,
+            max_length=max_length,
+            return_tensors=None,
+        )
+        # For causal LM, labels are the same as input_ids
+        model_inputs["labels"] = model_inputs["input_ids"].copy()
+        return model_inputs
+    
+    tokenized_dataset = formatted_dataset.map(
         tokenize_function,
         batched=True,
-        remove_columns=["problem_source", "expected_answer"],
-        desc="Tokenizing dataset",
-        num_proc=32,  # Adjust based on your CPU cores
+        remove_columns=formatted_dataset.column_names,
+        desc="Tokenizing"
     )
-    # add labels to the dataset
-    tokenized_datasets = tokenized_datasets.map(
-        lambda x: {"labels": x["input_ids"]},
-        remove_columns=["generated_solution"],
-        desc="Adding labels",
+    
+    # Split dataset (90% train, 10% eval)
+    train_size = int(0.9 * len(tokenized_dataset))
+    eval_size = len(tokenized_dataset) - train_size
+    
+    train_dataset, eval_dataset = torch.utils.data.random_split(
+        tokenized_dataset, [train_size, eval_size]
     )
-    # # We also rename the 'label' column to 'labels' which is the expected name for labels by the models of the
-    # # transformers library
-    # tokenized_datasets = tokenized_datasets.rename_column("label", "labels")
-
-    def collate_fn(examples):
-        """
-        Custom collate function to handle padding and conversion to tensors.
-        """
-        # Convert input_ids and attention_mask to tensors
-        input_ids = torch.tensor([ex["input_ids"] for ex in examples], dtype=torch.int64)
-        attention_mask = torch.tensor(
-            [ex["attention_mask"] for ex in examples], dtype=torch.int64
-        )
-        labels = torch.tensor([ex["labels"] for ex in examples], dtype=torch.int64)
-
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "labels": labels,
-        }
-
-    # split the dataset into train and validation sets
-    tokenized_datasets = tokenized_datasets.train_test_split(test_size=0.2, seed=42)
-    # Instantiate dataloaders.
-    train_dataloader = DataLoader(
-        tokenized_datasets["train"],
-        shuffle=True,
-        collate_fn=collate_fn,
-        batch_size=batch_size,
-        drop_last=True,
-    )
-    eval_dataloader = DataLoader(
-        tokenized_datasets["test"],
-        shuffle=False,
-        collate_fn=collate_fn,
-        batch_size=batch_size,
-        drop_last=True,
-    )
-
-    return train_dataloader, eval_dataloader
+    
+    logger.info(f"Train size: {len(train_dataset)}, Eval size: {len(eval_dataset)}")
+    
+    return train_dataset, eval_dataset
 
 
-def get_training_utilities(model_name: str, batch_size: int = 16, accelerator=None):
-    """
-    Returns a tuple of:
-        - Model
-        - Optimizer
-        - Train dataloader (prepared)
-        - Eval dataloader (prepared)
-        - LR Scheduler
-    Suitable for training on the MRPC dataset
-    """
-    from torch.optim import AdamW
-    from transformers import (
-        AutoModelForCausalLM,
-        get_linear_schedule_with_warmup,
-    )
-
-    from accelerate import Accelerator
-
-    if accelerator is None:
-        accelerator = Accelerator()
-    model = AutoModelForCausalLM.from_pretrained(model_name)
-    train_dataloader, eval_dataloader = get_dataloaders(model_name, batch_size)
-    optimizer = AdamW(model.parameters(), lr=0.0001)
-    lr_scheduler = get_linear_schedule_with_warmup(
-        optimizer=optimizer,
-        num_warmup_steps=100,
-        num_training_steps=len(train_dataloader) * 2,
-    )
-    train_dataloader, eval_dataloader = accelerator.prepare(
-        train_dataloader, eval_dataloader
-    )
-    return model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
-
-
-def get_named_parameters(model):
-    """
-    Same thing as `Accelerator.get_named_parameters` Returns a list of the named parameters of the model (extracted
-    from parallel)
-    """
-    from accelerate.utils import extract_model_from_parallel
-
-    model = extract_model_from_parallel(model)
-    return {n: p for n, p in model.named_parameters()}
-
-
-def evaluate_model(model, dataloader, metric, accelerator=None):
-    "Turns model to .eval(), runs dataloader, calculates metric, then turns eval back on"
-    model.eval()
-    for step, batch in enumerate(dataloader):
-        with torch.no_grad():
-            # W/ MS-AMP, we need to cast while evaluating
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                outputs = model(**batch)
-        predictions = outputs.logits.argmax(dim=-1)
-        references = batch["labels"]
-        if accelerator is not None and accelerator.num_processes > 1:
-            predictions, references = accelerator.gather_for_metrics(
-                (predictions, references)
-            )
-        metric.add_batch(predictions=predictions, references=references)
-    return metric.compute()
+def format_math_problem(example):
+    """Format a math problem for training"""
+    problem = clean_math_text(example.get('problem', ''))
+    
+    # Choose which solution to use
+    if 'generated_solution' in example and example['generated_solution']:
+        solution = clean_math_text(example['generated_solution'])
+    elif 'solution' in example and example['solution']:
+        solution = clean_math_text(example['solution'])
+    else:
+        # Skip examples without solutions
+        return None
+    
+    # Format as instruction-following return result in \boxed{}
+    formatted_text = f"""<|im_start|>system
+You are a helpful assistant that solves math problems step by step and returns the final answer in a \\boxed{{}} format.
+<|im_start|>user
+{problem}<|im_end|>
+<|im_start|>assistant
+{solution}<|im_end|>"""
+    
+    return formatted_text
