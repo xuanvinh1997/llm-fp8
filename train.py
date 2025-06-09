@@ -345,6 +345,31 @@ def main():
                 "opt_level": training_args.msamp_opt_level,
             },
         }
+    else: 
+        # fallback to default DeepSpeed config bf16
+        deepspeed_config = {
+            "train_batch_size": "auto",
+            "train_micro_batch_size_per_gpu": training_args.batch_size,
+            "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
+            "gradient_clipping": training_args.max_grad_norm,
+            "zero_optimization": {
+                "stage": training_args.zero_stage,
+                "offload_optimizer": {
+                    "device": "cpu" if training_args.zero_offload_optimizer else "none",
+                    "pin_memory": True if training_args.zero_offload_optimizer else False
+                },
+                "offload_param": {
+                    "device": "cpu" if training_args.zero_offload_param and training_args.zero_stage == 3 else "none",
+                    "pin_memory": True if training_args.zero_offload_param and training_args.zero_stage == 3 else False
+                },
+            },
+            "bf16": {
+                "enabled": True,
+            },
+            "steps_per_print": float("inf"),
+            "wall_clock_breakdown": False,
+            "zero_allow_untested_optimizer": True,
+        }
     
     # Set custom config
     deepspeed_plugin.deepspeed_config = deepspeed_config
@@ -359,7 +384,7 @@ def main():
     
     # Setup accelerator with DeepSpeed and FP8
     accelerator = Accelerator(
-        mixed_precision="fp8",
+        mixed_precision=training_args.mixed_precision,
         deepspeed_plugin=deepspeed_plugin,
         kwargs_handlers=[fp8_kwargs],
         gradient_accumulation_steps=training_args.gradient_accumulation_steps,
