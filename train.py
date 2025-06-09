@@ -274,47 +274,77 @@ def main():
     deepspeed_plugin = DeepSpeedPlugin(
         zero_stage=training_args.zero_stage,
         zero3_init_flag=training_args.zero3_init_flag,
-        zero_force_ds_cpu_optimizer=training_args.zero_offload_optimizer,
+        # zero_force_ds_cpu_optimizer=training_args.zero_offload_optimizer,
         zero3_save_16bit_model=True,
         gradient_accumulation_steps=training_args.gradient_accumulation_steps,
     )
     
     # Create custom DeepSpeed config
-    deepspeed_config = {
-        "train_batch_size": "auto",
-        "train_micro_batch_size_per_gpu": training_args.batch_size,
-        "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
-        "gradient_clipping": training_args.max_grad_norm,
-        "zero_optimization": {
-            "stage": training_args.zero_stage,
-            "offload_optimizer": {
-                "device": "cpu" if training_args.zero_offload_optimizer else "none",
-                "pin_memory": True if training_args.zero_offload_optimizer else False
+    if training_args.fp8_backend == "te":
+
+        deepspeed_config = {
+            "train_batch_size": "auto",
+            "train_micro_batch_size_per_gpu": training_args.batch_size,
+            "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
+            "gradient_clipping": training_args.max_grad_norm,
+            "zero_optimization": {
+                "stage": training_args.zero_stage,
+                "offload_optimizer": {
+                    "device": "cpu" if training_args.zero_offload_optimizer else "none",
+                    "pin_memory": True if training_args.zero_offload_optimizer else False
+                },
+                "offload_param": {
+                    "device": "cpu" if training_args.zero_offload_param and training_args.zero_stage == 3 else "none",
+                    "pin_memory": True if training_args.zero_offload_param and training_args.zero_stage == 3 else False
+                },
+                "overlap_comm": True,
+                "contiguous_gradients": True,
+                "reduce_bucket_size": 5e8,
+                "stage3_prefetch_bucket_size": 5e7,
+                "stage3_param_persistence_threshold": 1e5,
+                "stage3_gather_16bit_weights_on_model_save": True
             },
-            "offload_param": {
-                "device": "cpu" if training_args.zero_offload_param and training_args.zero_stage == 3 else "none",
-                "pin_memory": True if training_args.zero_offload_param and training_args.zero_stage == 3 else False
+            "bf16": {
+                "enabled": True,
+                "auto_cast": False,
+                "loss_scale": 0,
+                "initial_scale_power": 16,
+                "loss_scale_window": 1000,
+                "hysteresis": 2,
+                "min_loss_scale": 1
             },
-            "overlap_comm": True,
-            "contiguous_gradients": True,
-            "reduce_bucket_size": 5e8,
-            "stage3_prefetch_bucket_size": 5e7,
-            "stage3_param_persistence_threshold": 1e5,
-            "stage3_gather_16bit_weights_on_model_save": True
-        },
-        "bf16": {
-            "enabled": True,
-            "auto_cast": False,
-            "loss_scale": 0,
-            "initial_scale_power": 16,
-            "loss_scale_window": 1000,
-            "hysteresis": 2,
-            "min_loss_scale": 1
-        },
-        "steps_per_print": float("inf"),
-        "wall_clock_breakdown": False,
-        "zero_allow_untested_optimizer": True,
-    }
+            "steps_per_print": float("inf"),
+            "wall_clock_breakdown": False,
+            "zero_allow_untested_optimizer": True,
+        }
+    elif training_args.fp8_backend == "msamp":
+        import numpy as np
+        config = {
+            "train_batch_size": "auto",
+            "train_micro_batch_size_per_gpu": training_args.batch_size,
+            "gradient_accumulation_steps": training_args.gradient_accumulation_steps,
+            "gradient_clipping": training_args.max_grad_norm,
+            "zero_optimization": {
+                "stage": training_args.zero_stage,
+                "offload_optimizer": {
+                    "device": "cpu" if training_args.zero_offload_optimizer else "none",
+                    "pin_memory": True if training_args.zero_offload_optimizer else False
+                },
+                "offload_param": {
+                    "device": "cpu" if training_args.zero_offload_param and training_args.zero_stage == 3 else "none",
+                    "pin_memory": True if training_args.zero_offload_param and training_args.zero_stage == 3 else False
+                },
+            },
+            "gradient_clipping": 1.0,
+            "steps_per_print": np.inf,
+            "bf16": {"enabled": True},
+            "fp16": {"enabled": False},
+            "zero_allow_untested_optimizer": True,
+            "msamp": {
+                "enabled": True,
+                "opt_level": training_args.msamp_opt_level,
+            },
+        }
     
     # Set custom config
     deepspeed_plugin.deepspeed_config = deepspeed_config

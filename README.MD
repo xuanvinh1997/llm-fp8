@@ -73,7 +73,9 @@ python train.py
 
 ## training
 ```bash
-python train.py --preset fp8_msamp --dataset_path nvidia/OpenMathInstruct-2 --model_name Qwen/Qwen2.5-3B --tokenizer_name Qwen/Qwen2.5-Math-1.5B-Instruct --output_dir outputs/qwen-fp8-msamp
+accelerate launch     --config_file ds_config.yaml     --num_processes 2     --num_machines 1     --machine_rank 0     --main_process_port 29500     train.py     --model_name "Qwen/Qwen2.5-7B"     --dataset_name "nvidia/OpenMathInstruct-2"     --max_length 2048     --max_samples 100000 
+    --batch_size 1     --gradient_accumulation_steps 16     --learning_rate 1e-4     --num_epochs 2     --warmup_steps 500     --weight_decay 0.01     --max_grad_norm 1.0     --zero_stage 3     --zero_offload_optimizer     --zero_offload_param     --zero3_init_flag     --fp8_backend "te"     --te_fp8_format "HYBR
+ID"     --output_dir "./qwen_7b_math_fp8_model"     --save_steps 10000     --eval_steps 10000     --seed 42
 ```
 
 ## Performance Comparison

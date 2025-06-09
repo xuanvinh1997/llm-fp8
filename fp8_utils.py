@@ -60,6 +60,11 @@ class MathTrainingArguments:
     wandb_watch_freq: int = 1000
     wandb_log_freq: int = 10
     wandb_log_model: bool = False  # Log final model as artifact
+    max_grad_norm: float = 1.0  # Gradient clipping for stability
+    zero_stage: int = 0  # No ZeRO optimization for simplicity
+    zero_offload_param: bool = False  # No offloading for simplicity
+    zero_offload_optimizer: bool = False  # No offloading for simplicity
+    zero3_init_flag: bool = False  # No ZeRO-3 initialization for simplicity
 
 
 def clean_math_text(text):
