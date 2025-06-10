@@ -1,393 +1,840 @@
-#!/usr/bin/env python3
-"""
-Production-ready language model training script using Accelerate
-Optimized for instruction tuning with FP8 support via official Accelerate API
-Based on: https://huggingface.co/docs/accelerate/usage_guides/low_precision_training
-"""
-
-import os
-import argparse
-import logging
-from pathlib import Path
-from typing import Tuple
-
+from dataset import collate_fn, tokenize_function
 import torch
-from torch.utils.data import DataLoader
-from accelerate import Accelerator
-from accelerate.logging import get_logger
-from accelerate.utils import set_seed, ProjectConfiguration
-from accelerate.utils import MSAMPRecipeKwargs, TERecipeKwargs,AORecipeKwargs
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+import transformer_engine.pytorch as te
+from transformer_engine.common import recipe
+import json, datasets
+import argparse
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+import math
+from torch.nn import functional as F
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import logging
+import mlflow
+import mlflow.pytorch
+import time
+from datetime import datetime
+import os
+import tempfile
+from tqdm import tqdm
 
-from transformers import (
-    DataCollatorForSeq2Seq,
-    AutoModelForCausalLM,
-    AutoTokenizer
-)
-
-from config import TrainingConfig
-from dataset import InstructionDataset
-from loss import LossManager
-from model import ModelManager
-from optimizer import OptimizerManager
-
-# Configure standard logging for pre-accelerator initialization
+# Configure logging
 logging.basicConfig(level=logging.INFO)
-std_logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments with comprehensive options"""
-    parser = argparse.ArgumentParser(
-        description="Fine-tune language models with FP8 precision support",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-    
-    # Model and data arguments
-    model_group = parser.add_argument_group('Model and Data')
-    model_group.add_argument('--model_name', type=str, default="Qwen/Qwen2.5-Math-1.5B-Instruct",
-                            help='HuggingFace model ID or local path')
-    model_group.add_argument('--tokenizer_name', type=str, default=None,
-                            help='Tokenizer name (defaults to model_name)')
-    model_group.add_argument('--dataset_path', type=str, required=True,
-                            help='Path to instruction dataset (JSON file or HF dataset ID)')
-    model_group.add_argument('--output_dir', type=str, default="outputs/trained_model",
-                            help='Output directory for trained model')
-    
-    # Training hyperparameters
-    train_group = parser.add_argument_group('Training Hyperparameters')
-    train_group.add_argument('--num_epochs', type=int, default=3,
-                            help='Number of training epochs')
-    train_group.add_argument('--batch_size', type=int, default=4,
-                            help='Training batch size per device')
-    train_group.add_argument('--gradient_accumulation_steps', type=int, default=8,
-                            help='Gradient accumulation steps')
-    train_group.add_argument('--learning_rate', type=float, default=2e-5,
-                            help='Peak learning rate')
-    train_group.add_argument('--weight_decay', type=float, default=0.01,
-                            help='Weight decay coefficient')
-    train_group.add_argument('--max_length', type=int, default=2048,
-                            help='Maximum sequence length')
-    train_group.add_argument('--warmup_ratio', type=float, default=0.1,
-                            help='Warmup ratio for learning rate scheduler')
-    
-    # Precision and optimization
-    precision_group = parser.add_argument_group('Precision and Optimization')
-    precision_group.add_argument('--mixed_precision', type=str, default="bf16",
-                               choices=["no", "fp16", "bf16", "fp8"],
-                               help='Mixed precision training mode')
-    precision_group.add_argument('--fp8_backend', type=str, default="te",
-                               choices=["te", "msamp", "ao"],
-                               help='FP8 backend (only used with --mixed_precision=fp8)')
-    precision_group.add_argument('--te_fp8_format', type=str, default="HYBRID",
-                               choices=["E4M3", "E5M2", "HYBRID"],
-                               help='TransformersEngine FP8 format')
-    precision_group.add_argument('--msamp_opt_level', type=str, default="O2",
-                               choices=["O1", "O2"],
-                               help='MS-AMP optimization level')
-    precision_group.add_argument('--gradient_checkpointing', action='store_true', default=True,
-                               help='Enable gradient checkpointing')
-    
-    # System and performance
-    system_group = parser.add_argument_group('System and Performance')
-    system_group.add_argument('--dataloader_num_workers', type=int, default=4,
-                            help='Number of dataloader workers')
-    system_group.add_argument('--seed', type=int, default=42,
-                            help='Random seed for reproducibility')
-    system_group.add_argument('--resume_from_checkpoint', type=str, default=None,
-                            help='Resume training from checkpoint path')
-    
-    # Logging and monitoring
-    logging_group = parser.add_argument_group('Logging and Monitoring')
-    logging_group.add_argument('--logging_steps', type=int, default=10,
-                             help='Log every N training steps')
-    logging_group.add_argument('--save_steps', type=int, default=500,
-                             help='Save checkpoint every N steps')
-    logging_group.add_argument('--eval_steps', type=int, default=500,
-                             help='Evaluate every N steps')
-    logging_group.add_argument('--save_total_limit', type=int, default=3,
-                             help='Maximum number of checkpoints to keep')
-    logging_group.add_argument('--use_wandb', action='store_true',
-                             help='Enable Weights & Biases logging')
-    logging_group.add_argument('--wandb_project', type=str, default="llm-instruction-tuning",
-                             help='W&B project name')
-    logging_group.add_argument('--wandb_run_name', type=str, default=None,
-                             help='W&B run name')
-    
-    # Presets for common configurations
-    preset_group = parser.add_argument_group('Configuration Presets')
-    preset_group.add_argument('--preset', type=str, choices=['bf16', 'fp8_te', 'fp8_msamp', 'fp8_ao'],
-                            help='Use predefined configuration preset')
-    
-    return parser.parse_args()
+class FP8TrainingConfig:
+    """Configuration for FP8 training."""
+
+    def __init__(
+        self,
+        enabled: bool = True,
+        margin: int = 0,
+        interval: int = 1,
+        fp8_format_forward: str = "HYBRID",
+        amax_history_len: int = 1024,
+        amax_compute_algo: str = "most_recent",
+    ):
+        self.enabled = enabled
+        self.margin = margin
+        self.interval = interval
+        self.fp8_format_forward = getattr(recipe.Format, fp8_format_forward)
+        self.amax_history_len = amax_history_len
+        self.amax_compute_algo = amax_compute_algo
 
 
-def apply_preset(args: argparse.Namespace) -> None:
-    """Apply configuration presets to override default values"""
-    if args.preset == 'bf16':
-        args.mixed_precision = "bf16"
-        # args.batch_size = 4
-        args.gradient_accumulation_steps = 8
-    elif args.preset == 'fp8_te':
-        args.mixed_precision = "fp8"
-        args.fp8_backend = "te"
-        args.te_fp8_format = "HYBRID"
-        # args.batch_size = 8
-        args.gradient_accumulation_steps = 4
-    elif args.preset == 'fp8_msamp':
-        args.mixed_precision = "fp8"
-        args.fp8_backend = "msamp"
-        args.msamp_opt_level = "O2"
-        # args.batch_size = 8
-        args.gradient_accumulation_steps = 4
-    elif args.preset == 'fp8_ao':
-        args.mixed_precision = "fp8"
-        args.fp8_backend = "ao"
-        # args.batch_size = 8
-        args.gradient_accumulation_steps = 4
-
-
-def args_to_config(args: argparse.Namespace) -> TrainingConfig:
-    """Convert command line arguments to TrainingConfig"""
-    return TrainingConfig(
-        model_name=args.model_name,
-        tokenizer_name=args.tokenizer_name or args.model_name,
-        dataset_path=args.dataset_path,
-        output_dir=args.output_dir,
-        num_epochs=args.num_epochs,
-        batch_size=args.batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        learning_rate=args.learning_rate,
-        weight_decay=args.weight_decay,
-        max_length=args.max_length,
-        warmup_ratio=args.warmup_ratio,
-        mixed_precision=args.mixed_precision,
-        fp8_backend=args.fp8_backend,
-        te_fp8_format=args.te_fp8_format,
-        msamp_opt_level=args.msamp_opt_level,
-        gradient_checkpointing=args.gradient_checkpointing,
-        dataloader_num_workers=args.dataloader_num_workers,
-        logging_steps=args.logging_steps,
-        save_steps=args.save_steps,
-        eval_steps=args.eval_steps,
-        save_total_limit=args.save_total_limit,
-        use_wandb=args.use_wandb,
-        wandb_project=args.wandb_project,
-        wandb_run_name=args.wandb_run_name,
-        seed=args.seed,
-        resume_from_checkpoint=args.resume_from_checkpoint
+def create_fp8_recipe(config: FP8TrainingConfig):
+    """Create FP8 recipe with specified formats."""
+    return recipe.DelayedScaling(
+        margin=config.margin,
+        interval=config.interval,
+        fp8_format=config.fp8_format_forward,
+        amax_history_len=config.amax_history_len,
+        amax_compute_algo=config.amax_compute_algo,
     )
 
 
-class Trainer:
-    """Main training class with official FP8 support"""
-    
-    def __init__(self, config: TrainingConfig):
-        self.config = config
-        self._setup_accelerator()
-        self._setup_logging()
-        self.logger = get_logger(__name__)
-        self._log_config()
-        
-    def _setup_accelerator(self):
-        """Initialize Accelerator with official FP8 support"""
-        project_config = ProjectConfiguration(
-            project_dir=self.config.output_dir,
-            logging_dir=str(Path(self.config.output_dir) / "logs")
-        )
-        
-        kwarg_handlers = []
-        if self.config.mixed_precision == "fp8":
-            fp8_kwargs = self.config.get_fp8_kwargs()
-            if fp8_kwargs:
-                kwarg_handlers.append(fp8_kwargs)
-                std_logger.info(f"FP8 enabled with {self.config.fp8_backend} backend")
-        
-        self.accelerator = Accelerator(
-            gradient_accumulation_steps=self.config.gradient_accumulation_steps,
-            mixed_precision=self.config.mixed_precision,
-            project_config=project_config,
-            log_with="wandb" if self.config.use_wandb else None,
-            kwargs_handlers=kwarg_handlers
-        )
-        
-    def _setup_logging(self):
-        """Setup logging and monitoring"""
-        if self.config.use_wandb and self.accelerator.is_main_process:
-            self.accelerator.init_trackers(
-                project_name=self.config.wandb_project,
-                config=self.config.__dict__,
-                init_kwargs={"wandb": {"name": self.config.wandb_run_name}}
+def setup_mlflow(args):
+    """Setup MLflow experiment tracking."""
+    # Set MLflow tracking URI if provided
+    if args.mlflow_tracking_uri:
+        mlflow.set_tracking_uri(args.mlflow_tracking_uri)
+
+    # Set or create experiment
+    experiment_name = (
+        args.experiment_name
+        or f"language_model_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
+
+    try:
+        experiment = mlflow.get_experiment_by_name(experiment_name)
+        if experiment is None:
+            experiment_id = mlflow.create_experiment(experiment_name)
+            logger.info(
+                f"Created new MLflow experiment: {experiment_name} (ID: {experiment_id})"
             )
+        else:
+            experiment_id = experiment.experiment_id
+            logger.info(
+                f"Using existing MLflow experiment: {experiment_name} (ID: {experiment_id})"
+            )
+
+        mlflow.set_experiment(experiment_name)
+    except Exception as e:
+        logger.warning(f"Failed to setup MLflow experiment: {e}")
+        logger.info("Continuing with default experiment")
+
+
+def log_hyperparameters(args):
+    """Log all hyperparameters to MLflow."""
+    params = {
+        # Model parameters
+        "model_name": args.model_name,
+        "tokenizer_name": args.tokenizer_name,
+        "max_length": args.max_length,
+        # Dataset parameters
+        "dataset_name": args.dataset_name,
+        "train_ratio": args.train_ratio,
+        "seed": args.seed,
+        # Training parameters
+        "batch_size": args.batch_size,
+        "num_epochs": args.num_epochs,
+        "learning_rate": args.learning_rate,
+        "weight_decay": args.weight_decay,
+        "num_workers": args.num_workers,
+        # Precision parameters
+        "use_fp8": args.use_fp8,
+        "use_bf16": args.use_bf16,
+        "precision": "FP8" if args.use_fp8 else "BF16" if args.use_bf16 else "FP32",
+        # Logging parameters
+        "log_interval": args.log_interval,
+        "save_steps": args.save_steps,
+        "eval_steps": args.eval_steps,
+    }
+    print(f"Logging hyperparameters: {params}")
+    # Log parameters to MLflow
+    mlflow.log_params(params)
+    logger.info("Logged hyperparameters to MLflow")
+
+
+def train_step(model, batch, optimizer, fp8_recipe, use_fp8=True, use_bf16=False, scaler=None):
+    model.train()
+    optimizer.zero_grad()
+
+    # 1. Check input data validity
+    input_ids = batch["input_ids"].cuda()
+    labels = batch["labels"].cuda()
+    attention_mask = batch["attention_mask"].cuda()
+
+    # Forward pass
+    if use_fp8:
+        with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
+            outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
+    elif use_bf16:
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
+    else:
+        outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
+        # print(outputs)
     
-    def _log_config(self):
-        """Log training configuration"""
-        self.logger.info("=== Training Configuration ===")
-        self.logger.info(f"Model: {self.config.model_name}")
-        self.logger.info(f"Dataset: {self.config.dataset_path}")
-        self.logger.info(f"Output: {self.config.output_dir}")
-        self.logger.info(f"Precision: {self.config.mixed_precision}")
-        if self.config.mixed_precision == "fp8":
-            self.logger.info(f"FP8 Backend: {self.config.fp8_backend}")
-        self.logger.info(f"Batch Size: {self.config.batch_size}")
-        self.logger.info(f"Learning Rate: {self.config.learning_rate}")
-        self.logger.info("=" * 30)
-         
-    def train(self):
-        """Main training loop with automatic FP8 handling"""
-        set_seed(self.config.seed)
-        
-        # Setup components
-        model, tokenizer = ModelManager.setup_model_and_tokenizer(self.config)
-        from datasets import load_dataset
-        train_dataset = load_dataset(self.config.dataset_path, split='tokenized')
-        train_dataset = train_dataset.select(10) # for testing
-        # # tokenize
-        # def tokenize_function(examples):
-        #     messages = [[
-        #         {"role": "user", "content": problem},
-        #         {"role": "assistant", "content": solution}
-        #     ] for problem, solution in zip(examples["problem"], examples["generated_solution"])]
-        #     formatted_texts = tokenizer.apply_chat_template(
-        #         messages, add_generation_prompt=False, tokenize=False
-        #     )
-        #     tokenized = tokenizer(
-        #         formatted_texts, max_length=self.config.max_length, truncation=True,
-        #         padding="max_length", return_tensors="pt"
-        #     )
-        #     tokenized["labels"] = tokenized["input_ids"].clone()
+    loss = outputs.loss
+    
+    # Backward pass with optional gradient scaling
+    if scaler is not None:
+        scaler.scale(loss).backward()
+        # Gradient clipping with scaled gradients
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        scaler.step(optimizer)
+        scaler.update()
+    else:
+        loss.backward()
+        # Gradient clipping (recommended for training stability)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
 
-        #     return tokenized
+    return loss.item()
 
-        # train_dataset = train_dataset.map(
-        #     tokenize_function,
-        #     batched=True,
-        #     # remove_columns=["problem", "solution"],
-        #     desc="Tokenizing dataset",
-        #     num_proc=self.config.dataloader_num_workers,
-        # )
-        
-        data_collator = DataCollatorForSeq2Seq(
-            tokenizer=tokenizer, model=model, padding=True, return_tensors="pt"
+
+def save_model_to_mlflow(
+    model, tokenizer, step, eval_loss, eval_perplexity, model_name="best_model"
+):
+    """Save model to MLflow model registry."""
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "model"
+            model_path.mkdir(exist_ok=True)
+
+            # Save model and tokenizer
+            model.save_pretrained(model_path)
+            tokenizer.save_pretrained(model_path)
+
+            # Log model to MLflow
+            mlflow.pytorch.log_model(
+                pytorch_model=model,
+                artifact_path=model_name,
+                registered_model_name=f"{model_name}_{step}",
+                extra_files=[str(model_path)],
+            )
+
+            # Log model metrics as tags
+            mlflow.set_tag(f"{model_name}_step", step)
+            mlflow.set_tag(f"{model_name}_eval_loss", f"{eval_loss:.4f}")
+            mlflow.set_tag(f"{model_name}_eval_perplexity", f"{eval_perplexity:.2f}")
+
+            logger.info(f"Model {model_name} logged to MLflow at step {step}")
+
+    except Exception as e:
+        logger.warning(f"Failed to save model to MLflow: {e}")
+
+
+def train_model(args):
+    """Main training function with enhanced speed tracking."""
+    # Setup MLflow
+    setup_mlflow(args)
+
+    # Start MLflow run
+    with mlflow.start_run(run_name=f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
+        # Log hyperparameters
+        log_hyperparameters(args)
+
+        # Log system information
+        mlflow.log_param("cuda_available", torch.cuda.is_available())
+        if torch.cuda.is_available():
+            mlflow.log_param("cuda_device_count", torch.cuda.device_count())
+            mlflow.log_param("cuda_device_name", torch.cuda.get_device_name(0))
+
+        # Initialize tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        # Load and tokenize dataset
+        logger.info(f"Loading dataset: {args.dataset_name}")
+        dataset = datasets.load_dataset(args.dataset_name, split="train")
+
+        # Log dataset information
+        mlflow.log_metric("dataset_size", len(dataset))
+
+        # Tokenize dataset with progress bar
+        logger.info("Tokenizing dataset...")
+        tokenized_dataset = dataset.map(
+            tokenize_function,
+            fn_kwargs={"tokenizer": tokenizer, "max_length": args.max_length},
+            batched=True,
+            remove_columns=dataset.column_names,
+            desc="Tokenizing dataset",
+            num_proc=args.num_workers if args.num_workers > 0 else None,
         )
-        
+
+        # Split dataset into train/eval
+        print("Splitting dataset...")
+        dataset_dict = tokenized_dataset.train_test_split(
+            test_size=1 - args.train_ratio, seed=args.seed
+        )
+        train_dataset = dataset_dict["train"]
+        eval_dataset = dataset_dict["test"]
+
+        # Log dataset split information
+        mlflow.log_metric("train_dataset_size", len(train_dataset))
+        mlflow.log_metric("eval_dataset_size", len(eval_dataset))
+
+        # Create dataloaders
+        print("Creating data loaders...")
         train_dataloader = DataLoader(
-            train_dataset, batch_size=self.config.batch_size, shuffle=True,
-            collate_fn=data_collator, num_workers=self.config.dataloader_num_workers, pin_memory=True
+            train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=args.num_workers,
+            pin_memory=True,
         )
-        
-        optimizer = OptimizerManager.setup_optimizer(model, self.config)
-        num_training_steps = len(train_dataloader) * self.config.num_epochs
-        scheduler = OptimizerManager.setup_scheduler(optimizer, num_training_steps, self.config)
-        
-        # Prepare for training
-        model, optimizer, train_dataloader, scheduler = self.accelerator.prepare(
-            model, optimizer, train_dataloader, scheduler
+
+        eval_dataloader = DataLoader(
+            eval_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=args.num_workers,
+            pin_memory=True,
         )
-        
-        # Training info
-        self.logger.info(f"Starting training: {len(train_dataset)} examples, {self.config.num_epochs} epochs")
-        if self.config.mixed_precision == "fp8":
-            self.logger.info("FP8 training active - Accelerate handles precision automatically")
+
+        # Initialize model
+        logger.info(f"Loading model: {args.model_name}")
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            torch_dtype=torch.float16 if args.use_bf16 else torch.float32,
+        )
+        model = model.cuda()
+
+        # Log model information
+        num_params = sum(p.numel() for p in model.parameters())
+        num_trainable_params = sum(
+            p.numel() for p in model.parameters() if p.requires_grad
+        )
+        mlflow.log_param("total_parameters", num_params)
+        mlflow.log_param("trainable_parameters", num_trainable_params)
+
+        # Initialize optimizer
+        optimizer = optim.AdamW(
+            model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
+        )
+
+        # Initialize gradient scaler for mixed precision training
+        scaler = None
+        if (args.use_bf16 or hasattr(args, 'use_fp16') and args.use_fp16) and not args.use_fp8:
+            scaler = torch.amp.GradScaler('cuda')
+            logger.info("Initialized gradient scaler for mixed precision training")
+
+        # Create FP8 recipe
+        fp8_config = FP8TrainingConfig(
+            enabled=args.use_fp8,
+        )
+        fp8_recipe = create_fp8_recipe(fp8_config)
+
+        # Training metrics tracking
+        train_losses = []
+        eval_losses = []
+        best_eval_loss = float("inf")
+
+        # Speed tracking variables
+        speed_window_size = 10  # Number of batches to average speed over
+        batch_times = []
         
         # Training loop
-        global_step = 0
-        for epoch in range(self.config.num_epochs):
-            model.train()
-            total_loss = 0
-            
-            for step, batch in enumerate(train_dataloader):
-                with self.accelerator.accumulate(model):
-                    outputs = model(**batch)
-                    loss = LossManager.compute_loss(outputs.logits, batch["labels"], batch["attention_mask"])
-                    
-                    self.accelerator.backward(loss)
-                    
-                    # Fixed gradient clipping - use accelerator's method properly
-                    if self.accelerator.sync_gradients:
-                        self.accelerator.unscale_gradients(optimizer)
-                        grad_norm = self.accelerator.clip_grad_norm_(model.parameters(), 1.0)
-                        if self.config.use_wandb and global_step % self.config.logging_steps == 0:
-                            self.accelerator.log({"train/grad_norm": grad_norm}, step=global_step)
-                    
-                    optimizer.step()
-                    scheduler.step()
-                    optimizer.zero_grad()
-                
-                total_loss += loss.detach().float()
-                
-                # Logging and checkpointing
-                if global_step % self.config.logging_steps == 0:
-                    self._log_metrics(epoch, global_step, total_loss / (step + 1), scheduler.get_last_lr()[0])
-                
-                if global_step % self.config.save_steps == 0 and global_step > 0:
-                    self._save_checkpoint(model, tokenizer, global_step)
-                
-                global_step += 1
-            
-            avg_epoch_loss = total_loss / len(train_dataloader)
-            self.logger.info(f"Epoch {epoch} completed. Average loss: {avg_epoch_loss:.4f}")
-        
-        self._save_final_model(model, tokenizer)
-        if self.config.use_wandb:
-            self.accelerator.end_training()
-    
-    def _log_metrics(self, epoch: int, step: int, loss: float, lr: float):
-        """Log training metrics"""
-        self.logger.info(f"Epoch {epoch}, Step {step}: Loss = {loss:.4f}, LR = {lr:.2e}")
-        
-        if self.config.use_wandb:
-            logs = {
-                "train/loss": loss, "train/learning_rate": lr, "train/epoch": epoch,
-                "train/precision": self.config.mixed_precision
-            }
-            if self.config.mixed_precision == "fp8":
-                logs[f"train/fp8_backend"] = self.config.fp8_backend
-            self.accelerator.log(logs, step=step)
-    
-    def _save_checkpoint(self, model, tokenizer, step: int):
-        """Save training checkpoint"""
-        output_dir = Path(self.config.output_dir) / f"checkpoint-{step}"
-        self.accelerator.save_state(output_dir)
-        if self.accelerator.is_main_process:
-            tokenizer.save_pretrained(output_dir)
-            self.logger.info(f"Checkpoint saved to {output_dir}")
-    
-    def _save_final_model(self, model, tokenizer):
-        """Save final trained model"""
-        self.accelerator.wait_for_everyone()
-        unwrapped_model = self.accelerator.unwrap_model(model)
-        
-        if self.accelerator.is_main_process:
-            unwrapped_model.save_pretrained(
-                self.config.output_dir, save_function=self.accelerator.save,
-                is_main_process=self.accelerator.is_main_process
-            )
-            tokenizer.save_pretrained(self.config.output_dir)
-            self.logger.info(f"Final model saved to {self.config.output_dir}")
+        model.train()
+        total_steps = 0
+        start_time = time.time()
 
+        precision_str = "FP8" if args.use_fp8 else "BF16" if args.use_bf16 else "FP32"
+        logger.info(f"Starting training with {precision_str} precision")
+        logger.info(f"Total training steps per epoch: {len(train_dataloader)}")
+
+        # Log training start
+        mlflow.log_metric("training_start_time", start_time)
+
+        # Create main epoch progress bar
+        epoch_pbar = tqdm(
+            range(args.num_epochs),
+            desc="Training Progress",
+            ncols=140,  # Increased width for speed metrics
+            bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} epochs [{elapsed}<{remaining}, {postfix}]",
+        )
+
+        for epoch in epoch_pbar:
+            epoch_loss = 0.0
+            num_batches = 0
+            epoch_start_time = time.time()
+            
+            # Reset batch times for this epoch
+            batch_times = []
+
+            # Update epoch progress bar description
+            epoch_pbar.set_description(f"Epoch {epoch+1}/{args.num_epochs}")
+
+            # Create batch progress bar for current epoch
+            batch_pbar = tqdm(
+                train_dataloader,
+                desc=f"Epoch {epoch+1} Batches",
+                leave=False,
+                ncols=160,  # Increased width for speed metrics
+                bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {postfix}]",
+            )
+
+            for batch_idx, batch in enumerate(batch_pbar):
+                batch_start_time = time.time()
+                
+                loss = train_step(
+                    model,
+                    batch,
+                    optimizer,
+                    fp8_recipe,
+                    use_fp8=args.use_fp8,
+                    use_bf16=args.use_bf16,
+                    scaler=scaler,
+                )
+                
+                batch_end_time = time.time()
+                batch_time = batch_end_time - batch_start_time
+                batch_times.append(batch_time)
+                
+                # Keep only recent batch times for speed calculation
+                if len(batch_times) > speed_window_size:
+                    batch_times.pop(0)
+                
+                epoch_loss += loss
+                num_batches += 1
+                total_steps += 1
+
+                # Calculate speed metrics
+                if len(batch_times) >= 2:  # Need at least 2 samples for meaningful average
+                    avg_batch_time = sum(batch_times) / len(batch_times)
+                    batches_per_sec = 1.0 / avg_batch_time if avg_batch_time > 0 else 0
+                    samples_per_sec = batches_per_sec * args.batch_size
+                    
+                    # Estimate tokens per second (assuming average sequence length)
+                    # You can make this more accurate by tracking actual sequence lengths
+                    avg_seq_len = args.max_length * 0.8  # Rough estimate
+                    tokens_per_sec = samples_per_sec * avg_seq_len
+                else:
+                    batches_per_sec = 0
+                    samples_per_sec = 0
+                    tokens_per_sec = 0
+
+                # Update batch progress bar with current loss, learning rate, and speed
+                current_lr = optimizer.param_groups[0]["lr"]
+                postfix_dict = {
+                    "loss": f"{loss:.4f}",
+                    "avg_loss": f"{epoch_loss/num_batches:.4f}",
+                    "lr": f"{current_lr:.2e}",
+                    "step": total_steps,
+                    "batch/s": f"{batches_per_sec:.2f}",
+                    "samp/s": f"{samples_per_sec:.1f}",
+                }
+                
+                # Add tokens/s only if it's a reasonable number (not too large)
+                if tokens_per_sec > 0 and tokens_per_sec < 1e6:
+                    postfix_dict["tok/s"] = f"{tokens_per_sec:.0f}"
+                
+                batch_pbar.set_postfix(postfix_dict)
+
+                # Log training metrics to MLflow
+                mlflow.log_metric("train_loss", loss, step=total_steps)
+                mlflow.log_metric("batches_per_second", batches_per_sec, step=total_steps)
+                mlflow.log_metric("samples_per_second", samples_per_sec, step=total_steps)
+                mlflow.log_metric("tokens_per_second", tokens_per_sec, step=total_steps)
+
+                if batch_idx % args.log_interval == 0:
+                    logger.info(
+                        f"Epoch {epoch+1}/{args.num_epochs}, "
+                        f"Step {batch_idx+1}/{len(train_dataloader)}, "
+                        f"Loss: {loss:.4f}, "
+                        f"Speed: {batches_per_sec:.2f} batch/s, {samples_per_sec:.1f} samp/s"
+                    )
+
+                    # Log learning rate
+                    mlflow.log_metric("learning_rate", current_lr, step=total_steps)
+
+                # Evaluation during training
+                if args.eval_steps > 0 and total_steps % args.eval_steps == 0:
+                    logger.info(f"Running evaluation at step {total_steps}...")
+                    eval_loss, eval_perplexity = evaluate_model(
+                        model,
+                        eval_dataloader,
+                        fp8_recipe,
+                        use_fp8=args.use_fp8,
+                        use_bf16=args.use_bf16,
+                    )
+                    eval_losses.append((total_steps, eval_loss))
+
+                    # Log evaluation metrics to MLflow
+                    mlflow.log_metric("eval_loss", eval_loss, step=total_steps)
+                    mlflow.log_metric(
+                        "eval_perplexity", eval_perplexity, step=total_steps
+                    )
+
+                    logger.info(
+                        f"Evaluation - Loss: {eval_loss:.4f}, Perplexity: {eval_perplexity:.2f}"
+                    )
+
+                    # Save best model
+                    if eval_loss < best_eval_loss:
+                        best_eval_loss = eval_loss
+                        mlflow.log_metric("best_eval_loss", best_eval_loss)
+
+                        # Save to local directory
+                        best_model_path = Path(args.output_dir) / "best_model"
+                        best_model_path.mkdir(parents=True, exist_ok=True)
+                        torch.save(
+                            {
+                                "model_state_dict": model.state_dict(),
+                                "optimizer_state_dict": optimizer.state_dict(),
+                                "step": total_steps,
+                                "epoch": epoch,
+                                "eval_loss": eval_loss,
+                                "eval_perplexity": eval_perplexity,
+                            },
+                            best_model_path / "pytorch_model.bin",
+                        )
+
+                        # Save to MLflow
+                        if args.log_models_to_mlflow:
+                            save_model_to_mlflow(
+                                model,
+                                tokenizer,
+                                total_steps,
+                                eval_loss,
+                                eval_perplexity,
+                                "best_model",
+                            )
+
+                        logger.info(
+                            f"New best model saved (eval_loss: {eval_loss:.4f})"
+                        )
+
+                    model.train()  # Switch back to training mode
+
+                # Save checkpoint
+                if args.save_steps > 0 and total_steps % args.save_steps == 0:
+                    checkpoint_path = (
+                        Path(args.output_dir) / f"checkpoint-{total_steps}"
+                    )
+                    checkpoint_path.mkdir(parents=True, exist_ok=True)
+                    torch.save(
+                        {
+                            "model_state_dict": model.state_dict(),
+                            "optimizer_state_dict": optimizer.state_dict(),
+                            "step": total_steps,
+                            "epoch": epoch,
+                            "loss": loss,
+                        },
+                        checkpoint_path / "pytorch_model.bin",
+                    )
+                    logger.info(f"Saved checkpoint at step {total_steps}")
+
+            # Close batch progress bar
+            batch_pbar.close()
+
+            # End-of-epoch evaluation and metrics
+            avg_epoch_loss = epoch_loss / num_batches
+            train_losses.append((epoch + 1, avg_epoch_loss))
+            epoch_duration = time.time() - epoch_start_time
+            
+            # Calculate epoch-level speed metrics
+            epoch_batches_per_sec = num_batches / epoch_duration if epoch_duration > 0 else 0
+            epoch_samples_per_sec = epoch_batches_per_sec * args.batch_size
+
+            # Log epoch metrics
+            mlflow.log_metric("epoch_avg_loss", avg_epoch_loss, step=epoch + 1)
+            mlflow.log_metric("epoch_duration", epoch_duration, step=epoch + 1)
+            mlflow.log_metric("epoch_batches_per_sec", epoch_batches_per_sec, step=epoch + 1)
+            mlflow.log_metric("epoch_samples_per_sec", epoch_samples_per_sec, step=epoch + 1)
+
+            logger.info(
+                f"Epoch {epoch+1} completed. Avg loss: {avg_epoch_loss:.4f}, "
+                f"Duration: {epoch_duration:.2f}s, Speed: {epoch_batches_per_sec:.2f} batch/s"
+            )
+
+            # Run evaluation at end of epoch
+            logger.info("Running end-of-epoch evaluation...")
+            eval_loss, eval_perplexity = evaluate_model(
+                model,
+                eval_dataloader,
+                fp8_recipe,
+                use_fp8=args.use_fp8,
+                use_bf16=args.use_bf16,
+            )
+            eval_losses.append((f"epoch_{epoch+1}", eval_loss))
+
+            # Log end-of-epoch evaluation metrics
+            mlflow.log_metric("epoch_eval_loss", eval_loss, step=epoch + 1)
+            mlflow.log_metric("epoch_eval_perplexity", eval_perplexity, step=epoch + 1)
+
+            logger.info(
+                f"End-of-epoch evaluation - Loss: {eval_loss:.4f}, Perplexity: {eval_perplexity:.2f}"
+            )
+
+            # Update epoch progress bar with current metrics including speed
+            epoch_pbar.set_postfix(
+                {
+                    "train_loss": f"{avg_epoch_loss:.4f}",
+                    "eval_loss": f"{eval_loss:.4f}",
+                    "best_eval": f"{best_eval_loss:.4f}",
+                    "perplexity": f"{eval_perplexity:.2f}",
+                    "batch/s": f"{epoch_batches_per_sec:.2f}",
+                }
+            )
+
+            # Save best model if this is the best so far
+            if eval_loss < best_eval_loss:
+                best_eval_loss = eval_loss
+                mlflow.log_metric("best_eval_loss", best_eval_loss)
+
+                best_model_path = Path(args.output_dir) / "best_model"
+                best_model_path.mkdir(parents=True, exist_ok=True)
+                torch.save(
+                    {
+                        "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "step": total_steps,
+                        "epoch": epoch + 1,
+                        "eval_loss": eval_loss,
+                        "eval_perplexity": eval_perplexity,
+                    },
+                    best_model_path / "pytorch_model.bin",
+                )
+
+                # Save to MLflow
+                if args.log_models_to_mlflow:
+                    save_model_to_mlflow(
+                        model,
+                        tokenizer,
+                        total_steps,
+                        eval_loss,
+                        eval_perplexity,
+                        "best_model",
+                    )
+
+                logger.info(f"New best model saved at end of epoch {epoch+1}")
+
+        # Close epoch progress bar
+        epoch_pbar.close()
+
+        # Training completed - calculate overall statistics
+        total_training_time = time.time() - start_time
+        overall_batches_per_sec = total_steps / total_training_time if total_training_time > 0 else 0
+        overall_samples_per_sec = overall_batches_per_sec * args.batch_size
+        
+        mlflow.log_metric("total_training_time", total_training_time)
+        mlflow.log_metric("final_best_eval_loss", best_eval_loss)
+        mlflow.log_metric("overall_batches_per_sec", overall_batches_per_sec)
+        mlflow.log_metric("overall_samples_per_sec", overall_samples_per_sec)
+
+        # Save final model
+        final_path = Path(args.output_dir) / "final_model"
+        final_path.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "step": total_steps,
+                "epoch": args.num_epochs,
+                "config": vars(args),
+                "train_losses": train_losses,
+                "eval_losses": eval_losses,
+                "best_eval_loss": best_eval_loss,
+                "training_speed": {
+                    "total_training_time": total_training_time,
+                    "overall_batches_per_sec": overall_batches_per_sec,
+                    "overall_samples_per_sec": overall_samples_per_sec,
+                }
+            },
+            final_path / "pytorch_model.bin",
+        )
+
+        # Save final model to MLflow
+        if args.log_models_to_mlflow:
+            save_model_to_mlflow(
+                model,
+                tokenizer,
+                total_steps,
+                best_eval_loss,
+                math.exp(best_eval_loss) if best_eval_loss < 100 else float("inf"),
+                "final_model",
+            )
+
+        # Save training metrics
+        metrics_path = Path(args.output_dir) / "training_metrics.json"
+        with open(metrics_path, "w") as f:
+            json.dump(
+                {
+                    "train_losses": train_losses,
+                    "eval_losses": eval_losses,
+                    "best_eval_loss": best_eval_loss,
+                    "total_training_time": total_training_time,
+                    "overall_batches_per_sec": overall_batches_per_sec,
+                    "overall_samples_per_sec": overall_samples_per_sec,
+                    "config": vars(args),
+                },
+                f,
+                indent=2,
+            )
+
+        # Log metrics file as artifact
+        mlflow.log_artifact(str(metrics_path))
+
+        # Log additional artifacts
+        if args.output_dir and Path(args.output_dir).exists():
+            mlflow.log_artifacts(args.output_dir, artifact_path="training_outputs")
+
+        logger.info(f"\nTraining completed!")
+        logger.info(f"Total training time: {total_training_time:.2f} seconds")
+        logger.info(f"Overall training speed: {overall_batches_per_sec:.2f} batches/sec, {overall_samples_per_sec:.1f} samples/sec")
+        logger.info(f"Final model saved to {final_path}")
+        logger.info(f"Best model saved to {Path(args.output_dir) / 'best_model'}")
+        logger.info(f"Best evaluation loss: {best_eval_loss:.4f}")
+        logger.info(f"Training metrics saved to {metrics_path}")
+        logger.info(f"MLflow run ID: {mlflow.active_run().info.run_id}")
+
+
+def evaluate_model(model, eval_dataloader, fp8_recipe, use_fp8=True, use_bf16=False):
+    """Evaluate model on validation set with speed tracking."""
+    model.eval()
+    total_loss = 0.0
+    num_batches = 0
+    
+    # Speed tracking for evaluation
+    eval_start_time = time.time()
+
+    # Create progress bar for evaluation with speed metrics
+    eval_pbar = tqdm(
+        eval_dataloader,
+        desc="Evaluating",
+        leave=False,
+        ncols=120,
+        bar_format="{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {postfix}]",
+    )
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(eval_pbar):
+            # Move batch to GPU
+            input_ids = batch["input_ids"].cuda()
+            labels = batch["labels"].cuda()
+            attention_mask = batch["attention_mask"].cuda()
+
+            # Forward pass with appropriate precision
+            if use_fp8:
+                with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
+                    outputs = model(input_ids, attention_mask, labels)
+            elif use_bf16:
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    outputs = model(input_ids, attention_mask, labels)
+            else:
+                outputs = model(input_ids, attention_mask, labels)
+
+            loss = outputs["loss"]
+            total_loss += loss.item()
+            num_batches += 1
+
+            # Calculate evaluation speed
+            elapsed_time = time.time() - eval_start_time
+            if elapsed_time > 0 and num_batches > 0:
+                eval_batches_per_sec = num_batches / elapsed_time
+                eval_samples_per_sec = eval_batches_per_sec * eval_dataloader.batch_size
+            else:
+                eval_batches_per_sec = 0
+                eval_samples_per_sec = 0
+
+            # Update progress bar with current average loss and speed
+            avg_loss_so_far = total_loss / num_batches
+            eval_pbar.set_postfix({
+                "avg_loss": f"{avg_loss_so_far:.4f}",
+                "batch/s": f"{eval_batches_per_sec:.2f}",
+                "samp/s": f"{eval_samples_per_sec:.1f}"
+            })
+
+    avg_loss = total_loss / num_batches
+    perplexity = math.exp(avg_loss) if avg_loss < 100 else float("inf")
+    
+    # Log final evaluation speed
+    total_eval_time = time.time() - eval_start_time
+    final_eval_batches_per_sec = num_batches / total_eval_time if total_eval_time > 0 else 0
+    
+    logger.info(f"Evaluation speed: {final_eval_batches_per_sec:.2f} batches/sec")
+
+    return avg_loss, perplexity
 
 def main():
-    """Main entry point with argument parsing"""
-    args = parse_args()
-    
-    # Apply preset configurations if specified
-    if args.preset:
-        apply_preset(args)
-        std_logger.info(f"Applied preset: {args.preset}")
-    
-    # Convert arguments to config
-    config = args_to_config(args)
-    
-    # Create output directory
-    Path(config.output_dir).mkdir(parents=True, exist_ok=True)
-    
-    # Log startup info
-    std_logger.info(f"Initializing training with {config.mixed_precision} precision")
-    std_logger.info(f"Output directory: {config.output_dir}")
-    
-    # Initialize and run trainer
-    trainer = Trainer(config)
-    trainer.train()
+    parser = argparse.ArgumentParser(
+        description="Train Language Model with FP8 precision and MLflow logging"
+    )
+
+    # Data arguments
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default="Qwen/Qwen2.5-7B",
+        help="Pretrained model name or path",
+    )
+    parser.add_argument(
+        "--tokenizer_name",
+        type=str,
+        default="Qwen/Qwen2.5-Math-1.5B-Instruct",
+        help="Tokenizer to use",
+    )
+    parser.add_argument(
+        "--dataset_name",
+        type=str,
+        default="nvidia/OpenMathInstruct-2",
+        help="Name of the dataset",
+    )
+    parser.add_argument(
+        "--max_length", type=int, default=2048, help="Maximum sequence length"
+    )
+    parser.add_argument(
+        "--train_ratio",
+        type=float,
+        default=0.9,
+        help="Ratio of data to use for training (rest for evaluation)",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Random seed for dataset splitting"
+    )
+
+    # Training arguments
+    parser.add_argument(
+        "--batch_size", type=int, default=2, help="Batch size for training"
+    )
+    parser.add_argument(
+        "--num_epochs", type=int, default=3, help="Number of training epochs"
+    )
+    parser.add_argument(
+        "--learning_rate", type=float, default=5e-5, help="Learning rate"
+    )
+    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
+    parser.add_argument(
+        "--num_workers", type=int, default=4, help="Number of data loading workers"
+    )
+
+    # Precision arguments
+    parser.add_argument(
+        "--use_fp8", action="store_true", help="Use FP8 precision training"
+    )
+    parser.add_argument(
+        "--use_bf16", action="store_true", help="Use BF16 precision training"
+    )
+
+    # Logging and saving
+    parser.add_argument(
+        "--log_interval", type=int, default=100, help="Logging interval"
+    )
+    parser.add_argument(
+        "--save_steps", type=int, default=1000, help="Save checkpoint every N steps"
+    )
+    parser.add_argument(
+        "--eval_steps",
+        type=int,
+        default=500,
+        help="Run evaluation every N steps (0 to disable)",
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="./output",
+        help="Output directory for checkpoints",
+    )
+
+    # MLflow arguments
+    parser.add_argument(
+        "--mlflow_tracking_uri",
+        type=str,
+        default=None,
+        help="MLflow tracking URI (e.g., http://localhost:5000)",
+    )
+    parser.add_argument(
+        "--experiment_name", type=str, default=None, help="MLflow experiment name"
+    )
+    parser.add_argument(
+        "--log_models_to_mlflow",
+        action="store_true",
+        help="Log models to MLflow model registry",
+    )
+
+    args = parser.parse_args()
+
+    # Validate precision arguments
+    precision_count = sum([args.use_fp8, args.use_bf16, getattr(args, 'use_fp16', False)])
+    if precision_count > 1:
+        raise ValueError("Cannot use multiple precision modes at the same time")
+
+    # Validate train ratio
+    if not 0.0 < args.train_ratio < 1.0:
+        raise ValueError("train_ratio must be between 0 and 1")
+
+    train_model(args)
 
 
 if __name__ == "__main__":
