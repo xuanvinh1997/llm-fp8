@@ -5,6 +5,7 @@ import os
 import re
 from fp8_utils import MathTrainingArguments, clean_math_text, load_and_process_math_dataset
 from typing import Dict, List, Optional
+import transformer_engine.pytorch as te
 
 import torch
 from datasets import load_dataset, Dataset
@@ -192,15 +193,15 @@ def main():
     parser.add_argument("--num_epochs", type=int, default=2, help="Number of training epochs")
     parser.add_argument("--warmup_steps", type=int, default=200, help="Warmup steps")
     parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
-    
+    # precision
+    parser.add_argument("--mixed_precision", choices=["no", "fp16", "bf16", "fp8"], default="fp8",
+                       help="Mixed precision to use during training")
     # FP8 Backend
     parser.add_argument("--fp8_backend", choices=["msamp", "te", "torchao"], default="msamp", 
                        help="FP8 backend to use")
-    
     # MS-AMP specific
     parser.add_argument("--msamp_opt_level", choices=["O1", "O2", "O3"], default="O2",
                        help="MS-AMP optimization level")
-    
     # TransformerEngine specific
     parser.add_argument("--te_fp8_format", choices=["HYBRID", "E4M3", "E5M2"], default="HYBRID",
                        help="TransformerEngine FP8 format")
@@ -248,10 +249,16 @@ def main():
     
     # Set seed
     set_seed(training_args.seed)
-    
+    from accelerate.utils import TERecipeKwargs
     # Setup accelerator with FP8
-    accelerator = Accelerator()
-    print(accelerator.mixed_precision)
+    if training_args.mixed_precision == "fp8":
+        accelerator = Accelerator(mixed_precision="fp8", kwargs_handlers=[
+            TERecipeKwargs(fp8_format="HYBRID")
+        ])
+    else:
+        accelerator = Accelerator(mixed_precision=training_args.mixed_precision)
+    print(f"Using mixed precision: {accelerator.mixed_precision}")
+
     
     # Load model and tokenizer
     model, tokenizer = setup_qwen_model_and_tokenizer(training_args.model_name)
@@ -320,7 +327,7 @@ def main():
     model.train()
     global_step = 0
     total_loss = 0
-    
+    from transformer_engine.common import recipe
     for epoch in range(training_args.num_epochs):
         logger.info(f"Epoch {epoch + 1}/{training_args.num_epochs}")
         
@@ -331,8 +338,10 @@ def main():
         )
         
         for step, batch in enumerate(progress_bar):
+            # with te.fp8_autocast(enabled=accelerator.mixed_precision == "fp8",fp8_recipe=fp8_recipe):
+                # with te.fp8_autocast(enabled=True):
+                    # Forward pass
             with accelerator.accumulate(model):
-                # Forward pass
                 outputs = model(**batch)
                 loss = outputs.loss
                 total_loss += loss.detach().item()

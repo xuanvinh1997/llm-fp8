@@ -33,6 +33,7 @@ class MathTrainingArguments:
     eval_steps: int = 500
     output_dir: str = "./qwen_math_fp8_model"
     
+    mixed_precision: str = "fp8"  # Use FP8 for training
     # FP8 configuration
     fp8_backend: str = "msamp"
     
@@ -96,18 +97,7 @@ def load_and_process_math_dataset(dataset_name: str, tokenizer, max_length: int,
         
         logger.info(f"Dataset loaded with {len(dataset)} examples")
         logger.info(f"Dataset columns: {dataset.column_names}")
-        
-        # Show sample
-        if len(dataset) > 0:
-            sample = dataset[0]
-            logger.info(f"Sample keys: {list(sample.keys())}")
-            if 'problem' in sample:
-                logger.info(f"Sample problem: {sample['problem'][:200]}...")
-            if 'generated_solution' in sample:
-                logger.info(f"Has generated_solution: {bool(sample['generated_solution'])}")
-            if 'solution' in sample:
-                logger.info(f"Has solution: {bool(sample['solution'])}")
-        
+      
     except Exception as e:
         logger.error(f"Error loading dataset: {e}")
         raise
