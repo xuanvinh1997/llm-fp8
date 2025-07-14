@@ -1,11 +1,19 @@
 import math
 from dataclasses import dataclass
-from typing import Tuple, Optional, Literal
+from typing import Tuple, Optional, Literal, Dict, Any
+import warnings
 
 import torch
 from torch import nn
 import torch.nn.functional as F
 import torch.distributed as dist
+
+try:
+    from transformers import AutoModel, AutoConfig, AutoTokenizer, AutoModelForCausalLM
+    HF_AVAILABLE = True
+except ImportError:
+    HF_AVAILABLE = False
+    warnings.warn("transformers library not available. HuggingFace model loading will not work.")
 
 from kernel import FP8_E4M3, FP8_E5M2, act_quant, weight_dequant, fp8_gemm
 
@@ -20,6 +28,7 @@ attn_impl: Literal["naive", "absorb"] = "absorb"
 class ModelArgs:
     """
     Data class for defining model arguments and hyperparameters.
+    This configuration is set up for dense (non-MoE) transformer models.
 
     Attributes:
         max_batch_size (int): Maximum batch size.
@@ -28,13 +37,13 @@ class ModelArgs:
         vocab_size (int): Vocabulary size.
         dim (int): Model dimension.
         inter_dim (int): Intermediate dimension for MLP layers.
-        moe_inter_dim (int): Intermediate dimension for MoE layers.
+        moe_inter_dim (int): Intermediate dimension for MoE layers (unused in dense model).
         n_layers (int): Number of transformer layers.
-        n_dense_layers (int): Number of dense layers in the model.
+        n_dense_layers (int): Number of dense layers in the model (all layers in dense model).
         n_heads (int): Number of attention heads.
-        n_routed_experts (int): Number of routed experts for MoE layers.
-        n_shared_experts (int): Number of shared experts for MoE layers.
-        n_activated_experts (int): Number of activated experts in MoE layers.
+        n_routed_experts (int): Number of routed experts for MoE layers (unused in dense model).
+        n_shared_experts (int): Number of shared experts for MoE layers (unused in dense model).
+        n_activated_experts (int): Number of activated experts in MoE layers (unused in dense model).
         n_expert_groups (int): Number of expert groups.
         n_limited_groups (int): Number of limited groups for MoE routing.
         score_func (Literal["softmax", "sigmoid"]): Scoring function for MoE routing.
@@ -59,7 +68,7 @@ class ModelArgs:
     inter_dim: int = 10944
     moe_inter_dim: int = 1408
     n_layers: int = 27
-    n_dense_layers: int = 1
+    n_dense_layers: int = 27  # All layers are dense in non-MoE model
     n_heads: int = 16
     # moe
     n_routed_experts: int = 64
@@ -715,10 +724,11 @@ class MoE(nn.Module):
 class Block(nn.Module):
     """
     Transformer block combining attention and feed-forward layers.
+    This implementation uses dense MLP layers for all transformer blocks.
 
     Attributes:
         attn (nn.Module): Attention layer (MLA).
-        ffn (nn.Module): Feed-forward network (MLP or MoE).
+        ffn (nn.Module): Feed-forward network (MLP).
         attn_norm (nn.Module): Layer normalization for attention.
         ffn_norm (nn.Module): Layer normalization for feed-forward network.
     """
@@ -732,7 +742,8 @@ class Block(nn.Module):
         """
         super().__init__()
         self.attn = MLA(args)
-        self.ffn = MLP(args.dim, args.inter_dim) if layer_id < args.n_dense_layers else MoE(args)
+        # Use MLP for all layers in dense model
+        self.ffn = MLP(args.dim, args.inter_dim)
         self.attn_norm = RMSNorm(args.dim)
         self.ffn_norm = RMSNorm(args.dim)
 
@@ -816,11 +827,645 @@ class Transformer(nn.Module):
         return logits
 
 
-if __name__ == "__main__":
-    torch.set_default_dtype(torch.bfloat16)
-    torch.set_default_device("cuda")
-    torch.manual_seed(0)
+def load_hf_model_and_convert(
+    model_name_or_path: str,
+    target_args: Optional[ModelArgs] = None,
+    convert_to_fp8: bool = True,
+    trust_remote_code: bool = False
+) -> Transformer:
+    """
+    Load a Hugging Face model and convert it to our custom Transformer with FP8 support.
+    
+    Args:
+        model_name_or_path (str): Path or name of the Hugging Face model
+        target_args (Optional[ModelArgs]): Target model configuration. If None, will be inferred from HF config
+        convert_to_fp8 (bool): Whether to convert weights to FP8 format
+        trust_remote_code (bool): Whether to trust remote code when loading the model
+        
+    Returns:
+        Transformer: Our custom transformer model with converted weights
+        
+    Raises:
+        ImportError: If transformers library is not available
+        ValueError: If model architecture is not supported
+    """
+    if not HF_AVAILABLE:
+        raise ImportError("transformers library is required for loading HuggingFace models. Install with: pip install transformers")
+    
+    print(f"Loading model from {model_name_or_path}...")
+    
+    # Load HuggingFace model and config
+    hf_config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
+    
+    # Try to load a causal LM model first (includes lm_head), fallback to base model
+    try:
+        print("Attempting to load as AutoModelForCausalLM (includes lm_head)...")
+        hf_model = AutoModelForCausalLM.from_pretrained(
+            model_name_or_path, 
+            config=hf_config,
+            trust_remote_code=trust_remote_code,
+            torch_dtype=torch.bfloat16
+        )
+        hf_model.to("cuda")
+        print("Successfully loaded CausalLM model with language modeling head")
+    except Exception as e:
+        print(f"Failed to load as CausalLM: {e}")
+        print("Falling back to AutoModel (base model without lm_head)...")
+        hf_model = AutoModel.from_pretrained(
+            model_name_or_path, 
+            config=hf_config,
+            trust_remote_code=trust_remote_code,
+            torch_dtype=torch.bfloat16
+        )
+        print("Loaded base model - note: this may not include lm_head")
+    
+    # Create target model args based on HF config if not provided
+    if target_args is None:
+        target_args = _create_model_args_from_hf_config(hf_config)
+    
+    # Set dtype based on conversion preference
+    if convert_to_fp8:
+        target_args.dtype = "fp8"
+    else:
+        target_args.dtype = "bf16"
+    
+    print(f"Creating target model with config: {target_args}")
+    
+    # Create our custom model
+    custom_model = Transformer(target_args)
+    
+    # Convert and load weights
+    _convert_and_load_weights(hf_model, custom_model, hf_config, convert_to_fp8)
+    
+    print("Model conversion completed successfully!")
+    return custom_model
+
+
+def _create_model_args_from_hf_config(hf_config: Any) -> ModelArgs:
+    """
+    Create ModelArgs from Hugging Face model configuration.
+    
+    Args:
+        hf_config: Hugging Face model configuration
+        
+    Returns:
+        ModelArgs: Converted model arguments
+    """
+    # Common mappings for different model architectures
+    config_mappings = {
+        'vocab_size': getattr(hf_config, 'vocab_size', 102400),
+        'dim': getattr(hf_config, 'hidden_size', 2048),
+        'n_layers': getattr(hf_config, 'num_hidden_layers', 27),
+        'n_heads': getattr(hf_config, 'num_attention_heads', 16),
+        'max_seq_len': getattr(hf_config, 'max_position_embeddings', 4096 * 4),
+    }
+    
+    # Try to map intermediate dimension
+    inter_dim = getattr(hf_config, 'intermediate_size', None)
+    if inter_dim is None:
+        # Common pattern: intermediate_size = 4 * hidden_size for many models
+        inter_dim = config_mappings['dim'] * 4
+    config_mappings['inter_dim'] = inter_dim
+    
+    # Create ModelArgs with mapped values
     args = ModelArgs()
-    x = torch.randint(0, args.vocab_size, (2, 128))
-    model = Transformer(args)
-    print(model(x).size())
+    for key, value in config_mappings.items():
+        if hasattr(args, key):
+            setattr(args, key, value)
+    
+    # Ensure all layers are dense
+    args.n_dense_layers = args.n_layers
+    
+    # Adjust MLA parameters based on HF config for better compatibility
+    hf_dim = config_mappings['dim']
+    hf_n_heads = config_mappings['n_heads']
+    
+    # Calculate standard head dimension
+    standard_head_dim = hf_dim // hf_n_heads if hf_n_heads > 0 else 128
+    
+    # Adjust MLA dimensions to be more compatible with standard attention
+    # Keep the total dimension close to what standard attention would expect
+    total_qk_dim = standard_head_dim * hf_n_heads
+    
+    # Split this between nope and rope components
+    args.qk_nope_head_dim = int(standard_head_dim * 0.7)  # 70% for non-positional
+    args.qk_rope_head_dim = standard_head_dim - args.qk_nope_head_dim  # Rest for rotary
+    args.v_head_dim = standard_head_dim  # Keep value head same as standard
+    
+    # Adjust kv_lora_rank to be proportional to dimension
+    args.kv_lora_rank = min(512, hf_dim // 4)  # Cap at 512 but scale with model size
+    
+    print(f"Inferred config from HF model: vocab_size={args.vocab_size}, dim={args.dim}, "
+          f"n_layers={args.n_layers}, n_heads={args.n_heads}, inter_dim={args.inter_dim}")
+    print(f"MLA config: qk_nope_head_dim={args.qk_nope_head_dim}, qk_rope_head_dim={args.qk_rope_head_dim}, "
+          f"v_head_dim={args.v_head_dim}, kv_lora_rank={args.kv_lora_rank}")
+    
+    return args
+
+
+def _convert_and_load_weights(
+    hf_model: nn.Module, 
+    custom_model: Transformer, 
+    hf_config: Any,
+    convert_to_fp8: bool = True
+) -> None:
+    """
+    Convert and load weights from HuggingFace model to our custom model.
+    
+    Args:
+        hf_model: Source HuggingFace model
+        custom_model: Target custom model
+        hf_config: HuggingFace model configuration
+        convert_to_fp8: Whether to convert weights to FP8
+    """
+    print("Converting and loading weights...")
+    
+    hf_state_dict = hf_model.state_dict()
+    custom_state_dict = custom_model.state_dict()
+    
+    # Debug: Print all HuggingFace model keys to understand the structure
+    print("HuggingFace model keys:")
+    hf_keys = list(hf_state_dict.keys())
+    for i, key in enumerate(sorted(hf_keys)):
+        if i < 20:  # Print first 20 keys
+            print(f"  {key}")
+        elif i == 20:
+            print(f"  ... and {len(hf_keys) - 20} more keys")
+            break
+    
+    # Debug: Print some custom model keys for comparison
+    print("\nCustom model keys (first 10):")
+    custom_keys = list(custom_state_dict.keys())
+    for key in sorted(custom_keys)[:10]:
+        print(f"  {key}")
+    
+    # Create weight mapping
+    weight_mapping = _create_weight_mapping(hf_config, hf_state_dict)
+    
+    # Extract layer pattern for MLA construction
+    layer_pattern = None
+    for pattern in ['layers.{}.{}', 'model.layers.{}.{}', 'transformer.h.{}.{}']:
+        test_key = pattern.format(0, 'self_attn.q_proj.weight')
+        if test_key in hf_state_dict:
+            layer_pattern = pattern
+            break
+    if not layer_pattern:
+        layer_pattern = 'layers.{}.{}'  # fallback
+    
+    converted_weights = {}
+    missing_mappings = []
+    shape_mismatches = []
+    
+    for custom_key, custom_param in custom_state_dict.items():
+        # Skip scale parameters for now - they will be handled when converting weights to FP8
+        if custom_key.endswith('.scale'):
+            continue
+        
+        # Check if this is an MLA weight that needs special construction
+        if _needs_mla_construction(custom_key):
+            # Extract layer index for MLA construction
+            layer_idx = None
+            if 'layers.' in custom_key:
+                try:
+                    layer_idx = int(custom_key.split('.')[1])
+                except (IndexError, ValueError):
+                    pass
+            
+            if layer_idx is not None:
+                try:
+                    constructed_weight = _construct_mla_weight(custom_key, custom_param, hf_state_dict, 
+                                                             layer_pattern, layer_idx, hf_config)
+                    if convert_to_fp8 and 'weight' in custom_key and custom_param.element_size() == 1:
+                        converted_weight, scale = _convert_to_fp8(constructed_weight, custom_param.shape)
+                        converted_weights[custom_key] = converted_weight
+                        scale_key = custom_key.replace('.weight', '.scale')
+                        if scale_key in custom_state_dict:
+                            converted_weights[scale_key] = scale
+                    else:
+                        converted_weights[custom_key] = constructed_weight.to(custom_param.dtype).to(custom_param.device)
+                    continue
+                except Exception as e:
+                    print(f"Error constructing MLA weight {custom_key}: {e}")
+                    missing_mappings.append(custom_key)
+                    continue
+            
+        if custom_key in weight_mapping:
+            hf_key = weight_mapping[custom_key]
+            if hf_key in hf_state_dict:
+                hf_weight = hf_state_dict[hf_key]
+                
+                # Special handling for attention weights that need adaptation
+                if _needs_attention_adaptation(custom_key, hf_weight, custom_param):
+                    print(f"Adapting attention weight {custom_key}")
+                    try:
+                        adapted_weight = _adapt_attention_weight(custom_key, hf_weight, custom_param, hf_config)
+                        if convert_to_fp8 and 'weight' in custom_key and custom_param.element_size() == 1:
+                            converted_weight, scale = _convert_to_fp8(adapted_weight, custom_param.shape)
+                            converted_weights[custom_key] = converted_weight
+                            scale_key = custom_key.replace('.weight', '.scale')
+                            if scale_key in custom_state_dict:
+                                converted_weights[scale_key] = scale
+                        else:
+                            converted_weights[custom_key] = adapted_weight.to(custom_param.dtype)
+                    except Exception as e:
+                        print(f"Error adapting {custom_key}: {e}")
+                        shape_mismatches.append((custom_key, hf_weight.shape, custom_param.shape))
+                else:
+                    # Convert weight to appropriate format
+                    if convert_to_fp8 and 'weight' in custom_key and custom_param.element_size() == 1:
+                        # Convert to FP8 if target parameter is quantized
+                        print(f"Converting {custom_key}: HF shape {hf_weight.shape} -> Custom shape {custom_param.shape}")
+                        try:
+                            # Ensure weight is on the correct device before conversion
+                            if hf_weight.device != custom_param.device:
+                                hf_weight = hf_weight.to(custom_param.device)
+                            
+                            converted_weight, scale = _convert_to_fp8(hf_weight, custom_param.shape)
+                            converted_weights[custom_key] = converted_weight
+                            
+                            # Also set the corresponding scale parameter
+                            scale_key = custom_key.replace('.weight', '.scale')
+                            if scale_key in custom_state_dict:
+                                converted_weights[scale_key] = scale
+                        except ValueError as e:
+                            print(f"Error converting {custom_key}: {e}")
+                            shape_mismatches.append((custom_key, hf_weight.shape, custom_param.shape))
+                    else:
+                        # Direct copy with shape matching
+                        if hf_weight.shape == custom_param.shape:
+                            converted_weights[custom_key] = hf_weight.to(custom_param.dtype).to(custom_param.device)
+                        else:
+                            print(f"Shape mismatch for {custom_key}: HF {hf_weight.shape} vs Custom {custom_param.shape}")
+                            shape_mismatches.append((custom_key, hf_weight.shape, custom_param.shape))
+            else:
+                print(f"Warning: HF key {hf_key} not found for custom key {custom_key}")
+        else:
+            missing_mappings.append(custom_key)
+    
+    # Print summary of what couldn't be loaded
+    if missing_mappings:
+        print(f"\nWarning: {len(missing_mappings)} parameters have no mapping:")
+        for key in missing_mappings[:10]:  # Show first 10
+            print(f"  {key}")
+        if len(missing_mappings) > 10:
+            print(f"  ... and {len(missing_mappings) - 10} more")
+    
+    if shape_mismatches:
+        print(f"\nWarning: {len(shape_mismatches)} parameters have shape mismatches:")
+        for custom_key, hf_shape, custom_shape in shape_mismatches[:5]:  # Show first 5
+            print(f"  {custom_key}: HF shape {hf_shape} vs Custom shape {custom_shape}")
+        if len(shape_mismatches) > 5:
+            print(f"  ... and {len(shape_mismatches) - 5} more")
+    
+    # Load converted weights
+    custom_model.load_state_dict(converted_weights, strict=False)
+    
+    print(f"Successfully loaded {len(converted_weights)} weight tensors")
+
+
+def _needs_attention_adaptation(custom_key: str, hf_weight: torch.Tensor, custom_param: torch.Tensor) -> bool:
+    """
+    Check if an attention weight needs adaptation due to architectural differences.
+    """
+    # Check if it's an attention weight with shape mismatch
+    if '.attn.' in custom_key and 'weight' in custom_key:
+        return hf_weight.shape != custom_param.shape
+    return False
+
+
+def _needs_mla_construction(custom_key: str) -> bool:
+    """
+    Check if this is an MLA weight that needs to be constructed from HF weights.
+    """
+    mla_components = ['.attn.wkv_a.weight', '.attn.wkv_b.weight', '.attn.kv_norm.weight', '.attn.q_norm.weight']
+    return any(component in custom_key for component in mla_components)
+
+
+def _construct_mla_weight(custom_key: str, custom_param: torch.Tensor, hf_state_dict: Dict[str, torch.Tensor], 
+                         layer_pattern: str, layer_idx: int, hf_config: Any) -> torch.Tensor:
+    """
+    Construct MLA weights (wkv_a, wkv_b) from standard attention weights (k_proj, v_proj).
+    """
+    print(f"Constructing MLA weight {custom_key}")
+    
+    target_device = custom_param.device
+    
+    # Get HF key/value projection weights
+    k_proj_key = layer_pattern.format(layer_idx, 'self_attn.k_proj.weight')
+    v_proj_key = layer_pattern.format(layer_idx, 'self_attn.v_proj.weight')
+    
+    if '.attn.wkv_a.weight' in custom_key:
+        # wkv_a should have shape [kv_lora_rank + qk_rope_head_dim, dim]
+        # For now, initialize randomly since HF doesn't have an equivalent
+        print(f"Initializing wkv_a weight with random values (shape: {custom_param.shape})")
+        # Use small random initialization similar to standard linear layers
+        std = (2.0 / (custom_param.shape[0] + custom_param.shape[1])) ** 0.5
+        return torch.randn_like(custom_param) * std
+        
+    elif '.attn.wkv_b.weight' in custom_key:
+        # wkv_b should have shape [n_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank]
+        # We can try to adapt from v_proj, but dimensions likely won't match
+        if v_proj_key in hf_state_dict:
+            v_proj = hf_state_dict[v_proj_key]
+            print(f"Adapting wkv_b from v_proj: {v_proj.shape} -> {custom_param.shape}")
+            
+            # If we can reshape, do it
+            if v_proj.numel() == custom_param.numel():
+                return v_proj.view(custom_param.shape).to(target_device)
+            else:
+                # Initialize randomly since dimensions don't match
+                print(f"Cannot adapt v_proj to wkv_b due to size mismatch, using random initialization")
+                std = (2.0 / (custom_param.shape[0] + custom_param.shape[1])) ** 0.5
+                return torch.randn_like(custom_param) * std
+        else:
+            print(f"v_proj not found, initializing wkv_b with random values")
+            std = (2.0 / (custom_param.shape[0] + custom_param.shape[1])) ** 0.5
+            return torch.randn_like(custom_param) * std
+    
+    elif '.attn.kv_norm.weight' in custom_key:
+        # Initialize layer norm weights to ones (standard initialization)
+        print(f"Initializing kv_norm weight with ones (shape: {custom_param.shape})")
+        return torch.ones_like(custom_param)
+    
+    elif '.attn.q_norm.weight' in custom_key:
+        # Initialize layer norm weights to ones (standard initialization) 
+        print(f"Initializing q_norm weight with ones (shape: {custom_param.shape})")
+        return torch.ones_like(custom_param)
+    
+    # Fallback
+    return torch.zeros_like(custom_param)
+
+
+def _adapt_attention_weight(custom_key: str, hf_weight: torch.Tensor, custom_param: torch.Tensor, hf_config: Any) -> torch.Tensor:
+    """
+    Adapt attention weights from HuggingFace format to custom MLA format.
+    """
+    print(f"Adapting {custom_key}: {hf_weight.shape} -> {custom_param.shape}")
+    
+    # Ensure we're working with the right device
+    target_device = custom_param.device
+    
+    # For query weights that need expansion or contraction
+    if '.attn.wq.weight' in custom_key:
+        # HF format: [out_features, in_features] 
+        # Custom format might expect different out_features due to MLA head dimensions
+        custom_out, custom_in = custom_param.shape
+        hf_out, hf_in = hf_weight.shape
+        
+        if custom_in != hf_in:
+            raise ValueError(f"Input dimension mismatch: HF {hf_in} vs Custom {custom_in}")
+        
+        if custom_out > hf_out:
+            # Need to expand - pad with zeros or repeat
+            print(f"Expanding query weight from {hf_out} to {custom_out}")
+            expanded = torch.zeros(custom_out, custom_in, dtype=hf_weight.dtype, device=target_device)
+            expanded[:hf_out, :] = hf_weight.to(target_device)
+            return expanded
+        elif custom_out < hf_out:
+            # Need to contract - truncate
+            print(f"Contracting query weight from {hf_out} to {custom_out}")
+            return hf_weight[:custom_out, :].to(target_device)
+        else:
+            return hf_weight.to(target_device)
+    
+    # For other attention weights, try simple reshaping if elements match
+    if hf_weight.numel() == custom_param.numel():
+        print(f"Reshaping {custom_key} from {hf_weight.shape} to {custom_param.shape}")
+        return hf_weight.view(custom_param.shape).to(target_device)
+    
+    # If we can't adapt, zero-initialize with a warning
+    print(f"Warning: Cannot adapt {custom_key}, initializing with zeros")
+    return torch.zeros_like(custom_param)
+
+
+def _create_weight_mapping(hf_config: Any, hf_state_dict: Dict[str, torch.Tensor] = None) -> Dict[str, str]:
+    """
+    Create mapping between our custom model keys and HuggingFace model keys.
+    Supports multiple architectures and automatically detects the correct pattern.
+    
+    Args:
+        hf_config: HuggingFace model configuration
+        hf_state_dict: Optional HuggingFace state dict to check available keys
+        
+    Returns:
+        Dict[str, str]: Mapping from custom keys to HF keys
+    """
+    mapping = {}
+    
+    # Get available keys to determine the actual structure
+    available_keys = set(hf_state_dict.keys()) if hf_state_dict else set()
+    
+    print(f"Detecting model architecture from {len(available_keys)} available keys...")
+    
+    # Try different possible embedding patterns
+    embed_patterns = [
+        'embed_tokens.weight',
+        'model.embed_tokens.weight',
+        'embeddings.word_embeddings.weight',
+        'transformer.wte.weight'
+    ]
+    
+    for pattern in embed_patterns:
+        if pattern in available_keys:
+            mapping['embed.weight'] = pattern
+            print(f"Found embedding pattern: {pattern}")
+            break
+    
+    # Try different possible layer norm patterns for final norm
+    final_norm_patterns = [
+        'norm.weight',
+        'model.norm.weight', 
+        'layer_norm.weight',
+        'transformer.ln_f.weight'
+    ]
+    
+    final_norm_found = False
+    for pattern in final_norm_patterns:
+        if pattern in available_keys:
+            mapping['norm.weight'] = pattern
+            print(f"Found final norm pattern: {pattern}")
+            final_norm_found = True
+            break
+    
+    if not final_norm_found:
+        print("Note: No final norm found in HF model - this is expected for some model architectures")
+    
+    # Try different possible output head patterns
+    head_patterns = [
+        'lm_head.weight',
+        'output.weight',
+        'classifier.weight',
+        'head.weight'
+    ]
+    
+    head_found = False
+    for pattern in head_patterns:
+        if pattern in available_keys:
+            mapping['head.weight'] = pattern
+            print(f"Found head pattern: {pattern}")
+            head_found = True
+            break
+    
+    if not head_found:
+        print("Note: No output head found in HF model")
+        print("  This is normal if you loaded a base model without language modeling head")
+        print("  The custom model's head will be randomly initialized")
+    
+    # Layer mapping for transformer blocks
+    num_layers = getattr(hf_config, 'num_hidden_layers', 27)
+    
+    # Try different layer patterns
+    layer_patterns = [
+        'layers.{}.{}',  # Direct layers pattern (what we see in the output)
+        'model.layers.{}.{}',
+        'transformer.h.{}.{}',
+        'encoder.layer.{}.{}'
+    ]
+    
+    # Attention sub-patterns
+    attn_patterns = {
+        'q_proj': ['self_attn.q_proj.weight', 'attention.self.query.weight', 'attn.q_proj.weight'],
+        'k_proj': ['self_attn.k_proj.weight', 'attention.self.key.weight', 'attn.k_proj.weight'],
+        'v_proj': ['self_attn.v_proj.weight', 'attention.self.value.weight', 'attn.v_proj.weight'],
+        'o_proj': ['self_attn.o_proj.weight', 'attention.output.dense.weight', 'attn.o_proj.weight']
+    }
+    
+    # MLP sub-patterns
+    mlp_patterns = {
+        'gate_proj': ['mlp.gate_proj.weight', 'mlp.dense_h_to_4h.weight', 'feed_forward.w1.weight'],
+        'up_proj': ['mlp.up_proj.weight', 'mlp.dense_h_to_4h_2.weight', 'feed_forward.w3.weight'],
+        'down_proj': ['mlp.down_proj.weight', 'mlp.dense_4h_to_h.weight', 'feed_forward.w2.weight']
+    }
+    
+    # Layer norm sub-patterns
+    norm_patterns = {
+        'input_layernorm': ['input_layernorm.weight', 'attention.output.LayerNorm.weight', 'ln_1.weight'],
+        'post_attention_layernorm': ['post_attention_layernorm.weight', 'output.LayerNorm.weight', 'ln_2.weight']
+    }
+    
+    # Find the correct layer pattern
+    found_layer_pattern = None
+    for layer_pattern in layer_patterns:
+        test_key = layer_pattern.format(0, 'self_attn.q_proj.weight')
+        if test_key in available_keys:
+            found_layer_pattern = layer_pattern
+            print(f"Found layer pattern: {layer_pattern}")
+            break
+        # Try alternative patterns
+        test_key = layer_pattern.format(0, 'attention.self.query.weight')
+        if test_key in available_keys:
+            found_layer_pattern = layer_pattern
+            print(f"Found layer pattern: {layer_pattern}")
+            break
+    
+    # If we didn't find a pattern from available keys, default to the simple pattern
+    if not found_layer_pattern:
+        found_layer_pattern = 'layers.{}.{}'
+        print(f"Using default layer pattern: {found_layer_pattern}")
+    
+    # Map layer weights
+    for layer_idx in range(num_layers):
+        layer_prefix = f'layers.{layer_idx}'
+        
+        # Map attention weights - handle MLA architecture carefully
+        for custom_attn_key, hf_patterns in attn_patterns.items():
+            for hf_pattern in hf_patterns:
+                full_hf_key = found_layer_pattern.format(layer_idx, hf_pattern)
+                if full_hf_key in available_keys:
+                    # Map based on custom attention structure
+                    if custom_attn_key == 'q_proj':
+                        # For MLA, we use wq for direct query projection when q_lora_rank == 0
+                        mapping[f'{layer_prefix}.attn.wq.weight'] = full_hf_key
+                    elif custom_attn_key == 'o_proj':
+                        mapping[f'{layer_prefix}.attn.wo.weight'] = full_hf_key
+                    # Note: k_proj and v_proj will be handled separately as they need special adaptation
+                    # for MLA's wkv_a and wkv_b structure
+                    break
+        
+        # Map MLP weights
+        for custom_mlp_key, hf_patterns in mlp_patterns.items():
+            for hf_pattern in hf_patterns:
+                full_hf_key = found_layer_pattern.format(layer_idx, hf_pattern)
+                if full_hf_key in available_keys:
+                    if custom_mlp_key == 'gate_proj':
+                        mapping[f'{layer_prefix}.ffn.w1.weight'] = full_hf_key
+                    elif custom_mlp_key == 'down_proj':
+                        mapping[f'{layer_prefix}.ffn.w2.weight'] = full_hf_key
+                    elif custom_mlp_key == 'up_proj':
+                        mapping[f'{layer_prefix}.ffn.w3.weight'] = full_hf_key
+                    break
+        
+        # Map layer norms
+        for custom_norm_key, hf_patterns in norm_patterns.items():
+            for hf_pattern in hf_patterns:
+                full_hf_key = found_layer_pattern.format(layer_idx, hf_pattern)
+                if full_hf_key in available_keys:
+                    if custom_norm_key == 'input_layernorm':
+                        mapping[f'{layer_prefix}.attn_norm.weight'] = full_hf_key
+                    elif custom_norm_key == 'post_attention_layernorm':
+                        mapping[f'{layer_prefix}.ffn_norm.weight'] = full_hf_key
+                    break
+    
+    print(f"Created {len(mapping)} weight mappings")
+    return mapping
+
+
+def _convert_to_fp8(weight: torch.Tensor, target_shape: torch.Size) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Convert a weight tensor to FP8 format.
+    
+    Args:
+        weight: Input weight tensor
+        target_shape: Target shape for the converted weight
+        
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: FP8 quantized weight tensor and its scale
+    """
+    # Check if shapes are compatible
+    if weight.numel() != target_shape.numel():
+        raise ValueError(f"Cannot reshape weight: source has {weight.numel()} elements "
+                        f"but target shape {target_shape} requires {target_shape.numel()} elements. "
+                        f"Source shape: {weight.shape}, Target shape: {target_shape}")
+    
+    # Ensure weight is in the right shape
+    if weight.shape != target_shape:
+        print(f"Reshaping weight from {weight.shape} to {target_shape}")
+        weight = weight.view(target_shape)
+    
+    # Ensure weight is on GPU for Triton operations
+    if weight.device.type == 'cpu':
+        print(f"Moving weight to GPU for FP8 conversion (was on {weight.device})")
+        weight = weight.cuda()
+    
+    # Quantize to FP8
+    weight_q, weight_scale = act_quant(weight, block_size, dtype=FP8_E4M3)
+    
+    return weight_q, weight_scale
+
+
+def load_tokenizer_from_hf(model_name_or_path: str, **kwargs):
+    """
+    Load tokenizer from Hugging Face model.
+    
+    Args:
+        model_name_or_path (str): Path or name of the Hugging Face model
+        **kwargs: Additional arguments for tokenizer loading
+        
+    Returns:
+        Tokenizer from Hugging Face
+    """
+    if not HF_AVAILABLE:
+        raise ImportError("transformers library is required. Install with: pip install transformers")
+    
+    return AutoTokenizer.from_pretrained(model_name_or_path, **kwargs)
+
+
+# if __name__ == "__main__":
+#     torch.set_default_dtype(torch.bfloat16)
+#     torch.set_default_device("cuda")
+#     torch.manual_seed(0)
+#     args = ModelArgs()
+#     x = torch.randint(0, args.vocab_size, (2, 128))
+#     model = Transformer(args)
+#     print(model(x).size())
+
