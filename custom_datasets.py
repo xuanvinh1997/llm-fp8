@@ -27,22 +27,33 @@ def load_and_prepare_dataset(
     # check key existence
     if (
         "problem" in dataset.column_names
-        or "generated_solution" in dataset.column_names
+        and "generated_solution" in dataset.column_names
     ):
         # create a new column 'text' if it doesn't exist
         if "text" not in dataset.column_names:
-            dataset = dataset.map(
-                lambda x: {
-                    "text": tokenizer.apply_chat_template(
-                        x["problem"], x["generated_solution"], tokenize=False
+            def format_conversation(example):
+                # Create a simple conversation format
+                conversation = [
+                    {"role": "user", "content": example["problem"]},
+                    {"role": "assistant", "content": example["generated_solution"]}
+                ]
+                try:
+                    text = tokenizer.apply_chat_template(
+                        conversation, tokenize=False, add_generation_prompt=False
                     )
-                },
+                except:
+                    # Fallback to simple concatenation if chat template fails
+                    text = f"Problem: {example['problem']}\nSolution: {example['generated_solution']}"
+                return {"text": text}
+            
+            dataset = dataset.map(
+                format_conversation,
                 batched=False,
                 num_proc=4,
             )
-    else:
+    elif "text" not in dataset.column_names:
         raise ValueError(
-            "Dataset does not contain 'problem' or 'generated_solution' columns."
+            "Dataset must contain either 'text' column or both 'problem' and 'generated_solution' columns."
         )
     
     # split the dataset into training and validation sets
