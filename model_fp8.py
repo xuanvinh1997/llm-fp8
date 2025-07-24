@@ -1,3 +1,6 @@
+import math
+from typing import Optional
+from typing_extensions import Literal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,7 +9,6 @@ import triton.language as tl
 
 FP8_E4M3 = torch.float8_e4m3fn
 FP8_E5M2 = torch.float8_e5m2
-BLOCK_SIZE = 128
 
 def apply_rope(x, seq_len):
     # x: (B, T, D)
@@ -152,88 +154,261 @@ def fp8_gemm(a: torch.Tensor, a_s: torch.Tensor, b: torch.Tensor, b_s: torch.Ten
     grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']), triton.cdiv(N, META['BLOCK_SIZE_N']))
     fp8_gemm_kernel[grid](a, b, c, a_s, b_s, M, N, K)
     return c
-gemm_impl = 'fp16'  # Set to 'fp8' to use FP8 GEMM, or 'linear' for standard linear operation
+world_size = 1
+rank = 0
+block_size = 128
+gemm_impl: Literal["bf16", "fp8"] = "fp8"
+attn_impl: Literal["naive", "absorb"] = "absorb"
+import torch
+import torch.nn as nn
+from kernel import act_quant, fp8_gemm
+
+
 class FP8Linear(nn.Module):
-    def __init__(self, in_dim, out_dim):
+    """
+    FP8Linear layer with FP8-weight storage and FP8-based GEMM for both training and inference.
+
+    Attributes:
+        in_features (int): Size of each input sample.
+        out_features (int): Size of each output sample.
+        bias (bool): If True, adds a learnable bias to the output.
+        block_size (int): Block size for FP8 quantization (default: 128).
+    """
+    def __init__(self, in_features: int, out_features: int, bias: bool = True, block_size: int = 128):
         super().__init__()
-        self.weight = nn.Parameter(torch.empty(out_dim, in_dim))
-        nn.init.xavier_uniform_(self.weight)
-
-    def forward(self, x):
-        B, T, D = x.shape
-        x_flat = x.reshape(-1, D)
-        
-        # x_deq = dequantize_fp8_triton(x_fp8, x_scale)
-        # w_deq = dequantize_fp8_triton(w_fp8, w_scale)
-        if gemm_impl == 'fp8':
-            # Use FP8 GEMM for matrix multiplication
-            x_fp8, x_scale = quantize_fp8_triton(x_flat.contiguous().flatten(), fmt=FP8_E4M3)
-            w_fp8, w_scale = quantize_fp8_triton(self.weight.contiguous().flatten(), fmt=FP8_E4M3)
-            out = fp8_gemm(x_fp8, x_scale, w_fp8, w_scale)
+        self.in_features = in_features
+        self.out_features = out_features
+        self.block_size = block_size
+        # FP8 weight tensor
+        self.weight = nn.Parameter(
+            torch.empty(out_features, in_features, dtype=torch.float8_e4m3fn)
+        )
+        # block-wise scale parameters
+        scale_rows = (out_features + block_size - 1) // block_size
+        scale_cols = (in_features + block_size - 1) // block_size
+        self.weight_scale = nn.Parameter(
+            torch.empty(scale_rows, scale_cols, dtype=torch.float32)
+        )
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_features, dtype=torch.float32))
         else:
-            # Fallback to standard linear operation if not using FP8
-            out = torch.matmul(x_flat, self.weight.t())
-        return out.view(B, T, -1)
+            self.register_parameter('bias', None)
+        self.reset_parameters()
 
+    def reset_parameters(self):
+        """
+        Initialize parameters: Xavier uniform for weights, ones for scales, zeros for bias.
+        """
+        nn.init.xavier_uniform_(self.weight.float())
+        nn.init.ones_(self.weight_scale)
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass using FP8 quantization for activations and weights.
+
+        Steps:
+        1. Quantize input activations to FP8 with block-wise scales.
+        2. Perform FP8 GEMM (x_q * weight) with appropriate scaling.
+        3. Add bias if present.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, *, in_features).
+
+        Returns:
+            torch.Tensor: Output tensor of shape (batch_size, *, out_features).
+        """
+        # Quantize input activations
+        x_q, x_scale = act_quant(x, self.block_size)
+        # FP8 GEMM: (x_q @ weight_fp8) -> high-precision output
+        y = fp8_gemm(x_q, x_scale, self.weight, self.weight_scale)
+        # Add bias if required
+        if self.bias is not None:
+            y = y + self.bias
+        return y
+
+    
 class FP8LayerNorm(nn.Module):
-    def __init__(self, normalized_shape, eps=1e-5):
+    """
+    LayerNorm variant with FP8-stored gamma/beta parameters and block-wise scale factors.
+
+    Only supports 1D normalized_shape.
+    """
+    def __init__(self, normalized_shape, eps: float = 1e-5, block_size: int = 128):
         super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(normalized_shape))
-        self.bias = nn.Parameter(torch.zeros(normalized_shape))
-
-    def forward(self, x):
-        x_fp8, scale = quantize_fp8_triton(x.contiguous().flatten(), fmt=FP8_E4M3)
-        x_deq = dequantize_fp8_triton(x_fp8, scale).view_as(x)
-        mean = x_deq.mean(-1, keepdim=True)
-        var = x_deq.var(-1, unbiased=False, keepdim=True)
-        normed = (x_deq - mean) / torch.sqrt(var + self.eps)
-        return normed * self.weight + self.bias
-
-class MiniFP8Transformer(nn.Module):
-    def __init__(self, d_model=128, n_heads=4):
-        super().__init__()
-        self.q_proj = FP8Linear(d_model, d_model)
-        self.k_proj = FP8Linear(d_model, d_model)
-        self.v_proj = FP8Linear(d_model, d_model)
-        self.out_proj = FP8Linear(d_model, d_model)
-        self.norm = FP8LayerNorm(d_model)
-
-    def forward(self, x):
-        B, T, D = x.size()
-        x = self.norm(x)
-        q = self.q_proj(x)
-        k = self.k_proj(x)
-        v = self.v_proj(x)
-
-        # Apply RoPE to q and k
-        q = apply_rope(q, T)
-        k = apply_rope(k, T)
-
-        
-        # q_deq = dequantize_fp8_triton(q_fp8, q_scale).view_as(q)
-        # k_deq = dequantize_fp8_triton(k_fp8, k_scale).view_as(k)
-        if gemm_impl == 'fp8':
-            q_fp8, q_scale = quantize_fp8_triton(q.contiguous().flatten(), fmt=FP8_E5M2)
-            k_fp8, k_scale = quantize_fp8_triton(k.contiguous().flatten(), fmt=FP8_E5M2)
-            attn_scores = fp8_gemm(q_fp8, q_scale, k_fp8, k_scale) / (D ** 0.5)
+        # Normalize shape must be 1D
+        if isinstance(normalized_shape, int):
+            self.normalized_shape = (normalized_shape,)
         else:
-            attn_scores = torch.matmul(q, k.transpose(-2, -1)) / (D ** 0.5)
-        attn_probs = F.softmax(attn_scores, dim=-1)
-        # if gemm_impl == 'fp8':
-        #     v_fp8, v_scale = quantize_fp8_triton(v.contiguous().flatten(), fmt=FP8_E4M3)
-        #     attn_x, attn_scale = quantize_fp8_triton(attn_probs.contiguous().flatten(), fmt=FP8_E4M3)
-        #     attn_out = fp8_gemm(attn_x, attn_scale, v_fp8, v_scale)
-        # else:
-        print(attn_probs.shape)
-        attn_out = torch.matmul(attn_probs, v)
-        return self.out_proj(attn_out)
+            self.normalized_shape = tuple(normalized_shape)
+        if len(self.normalized_shape) != 1:
+            raise ValueError("FP8LayerNorm only supports 1D normalized_shape")
+        self.dim = self.normalized_shape[0]
+        self.eps = eps
+        self.block_size = block_size
+
+        # FP8 weight (gamma) and bias (beta)
+        self.weight = nn.Parameter(
+            torch.empty(self.dim, dtype=torch.float8_e4m3fn)
+        )
+        self.bias = nn.Parameter(
+            torch.empty(self.dim, dtype=torch.float8_e4m3fn)
+        )
+        # Block-wise scale parameters for gamma and beta
+        num_blocks = (self.dim + block_size - 1) // block_size
+        self.weight_scale = nn.Parameter(
+            torch.ones(num_blocks, dtype=torch.float32)
+        )
+        self.bias_scale = nn.Parameter(
+            torch.ones(num_blocks, dtype=torch.float32)
+        )
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        # Initialize gamma to 1 and beta to 0, then quantize to FP8
+        w = torch.ones(self.dim, dtype=torch.float32)
+        b = torch.zeros(self.dim, dtype=torch.float32)
+        self.weight.data = w.to(torch.float8_e4m3fn)
+        self.bias.data = b.to(torch.float8_e4m3fn)
+        # Scales default to 1
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (..., dim)
+        # Compute mean and variance in float32
+        mean = x.mean(dim=-1, keepdim=True)
+        var = x.var(dim=-1, unbiased=False, keepdim=True)
+        x_norm = (x - mean) / torch.sqrt(var + self.eps)
+        # Build expanded scale vectors
+        scale_vec = self.weight_scale.repeat_interleave(self.block_size)[: self.dim]
+        bias_vec = self.bias_scale.repeat_interleave(self.block_size)[: self.dim]
+        # Dequantize gamma and beta
+        gamma = self.weight.to(torch.float32) * scale_vec
+        beta = self.bias.to(torch.float32) * bias_vec
+        # Apply affine transform
+        return x_norm * gamma + beta
+
+
+
+class FP8MultiHeadAttention(nn.Module):
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        dropout: float = 0.0,
+        block_size: int = 128,
+    ):
+        super().__init__()
+        assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.dropout = nn.Dropout(dropout)
+        # FP8 linear projections for Q, K, V, and output
+        self.q_proj = FP8Linear(embed_dim, embed_dim, bias=False, block_size=block_size)
+        self.k_proj = FP8Linear(embed_dim, embed_dim, bias=False, block_size=block_size)
+        self.v_proj = FP8Linear(embed_dim, embed_dim, bias=False, block_size=block_size)
+        self.out_proj = FP8Linear(embed_dim, embed_dim, bias=False, block_size=block_size)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        attn_mask: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """
+        x: (batch_size, seq_length, embed_dim)
+        attn_mask: (batch_size, seq_length) or (batch_size, seq_length, seq_length)
+        """
+        B, T, C = x.size()
+        # Project to Q, K, V
+        q = self.q_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        # Scaled dot-product attention
+        scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        if attn_mask is not None:
+            # assume mask==0 means masked
+            scores = scores.masked_fill(attn_mask.unsqueeze(1) == 0, float('-inf'))
+        attn = F.softmax(scores, dim=-1)
+        attn = self.dropout(attn)
+        context = (attn @ v).transpose(1, 2).contiguous().view(B, T, C)
+        # Final projection
+        out = self.out_proj(context)
+        return out
+
+
+class FP8TransformerLayer(nn.Module):
+    def __init__(
+        self,
+        embed_dim: int,
+        num_heads: int,
+        mlp_dim: int,
+        dropout: float = 0.1,
+        block_size: int = 128,
+    ):
+        super().__init__()
+        self.self_attn = FP8MultiHeadAttention(
+            embed_dim, num_heads, dropout=dropout, block_size=block_size
+        )
+        self.norm1 = FP8LayerNorm(embed_dim, block_size=block_size)
+        self.norm2 = FP8LayerNorm(embed_dim, block_size=block_size)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        # Feed-forward network
+        self.fc1 = FP8Linear(embed_dim, mlp_dim, bias=True, block_size=block_size)
+        self.fc2 = FP8Linear(mlp_dim, embed_dim, bias=True, block_size=block_size)
+        self.act = nn.GELU()
+
+    def forward(self, x: torch.Tensor, attn_mask: torch.Tensor = None) -> torch.Tensor:
+        # Self-attention block
+        attn_out = self.self_attn(x, attn_mask)
+        x = x + self.dropout1(attn_out)
+        x = self.norm1(x)
+        # Feed-forward block
+        ffn_out = self.fc2(self.act(self.fc1(x)))
+        x = x + self.dropout2(ffn_out)
+        x = self.norm2(x)
+        return x
+
+
+class FP8Transformer(nn.Module):
+    def __init__(
+        self,
+        num_layers: int,
+        embed_dim: int,
+        num_heads: int,
+        mlp_dim: int,
+        dropout: float = 0.1,
+        block_size: int = 128,
+    ):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            FP8TransformerLayer(
+                embed_dim, num_heads, mlp_dim, dropout=dropout, block_size=block_size
+            )
+            for _ in range(num_layers)
+        ])
+        self.norm = FP8LayerNorm(embed_dim, block_size=block_size)
+
+    def forward(self, x: torch.Tensor, attn_mask: torch.Tensor = None) -> torch.Tensor:
+        for layer in self.layers:
+            x = layer(x, attn_mask)
+        return self.norm(x)
+
+
 
 class MiniLM(nn.Module):
     def __init__(self, vocab_size=5000, d_model=128):
         super().__init__()
         self.embed = nn.Embedding(vocab_size, d_model)
-        self.transformer = MiniFP8Transformer(d_model=d_model)
+        self.transformer = FP8Transformer(
+            num_layers=6,
+            embed_dim=d_model,
+            num_heads=8,
+            mlp_dim=256,
+            dropout=0.1,
+            block_size=128
+        )
         self.norm = FP8LayerNorm(d_model)
         self.lm_head = FP8Linear(d_model, vocab_size)
 
@@ -250,3 +425,4 @@ if __name__ == "__main__":
     input_ids = torch.randint(0, 5000, (2, 16)).to('cuda')
     logits = model(input_ids)
     print("Logits:", logits.shape)
+    print("Logits dtype:", logits.dtype)
