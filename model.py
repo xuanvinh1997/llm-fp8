@@ -17,11 +17,11 @@ except ImportError:
 
 from kernel import FP8_E4M3, FP8_E5M2, act_quant, weight_dequant, fp8_gemm
 
-
+global world_size, rank, block_size, gemm_impl, attn_impl
 world_size = 1
 rank = 0
 block_size = 128
-gemm_impl: Literal["bf16", "fp8"] = "bf16"
+gemm_impl: Literal["bf16", "fp8"] = "fp8"
 attn_impl: Literal["naive", "absorb"] = "absorb"
 
 @dataclass

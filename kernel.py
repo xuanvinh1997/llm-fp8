@@ -30,6 +30,9 @@ def act_quant_kernel(x_ptr, y_ptr, s_ptr, max_val: tl.constexpr, BLOCK_SIZE: tl.
     offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     x = tl.load(x_ptr + offs).to(tl.float32)
     s = tl.max(tl.abs(x)) / max_val # scale factor for quantization
+    # max_abs = tl.max(tl.abs(x))
+    # s = max_abs / max_val
+    # s = tl.where(s == 0, 1.0, s)
     y = x / s
     y = y.to(y_ptr.dtype.element_ty)
     tl.store(y_ptr + offs, y)
