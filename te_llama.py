@@ -66,16 +66,15 @@ class TELlamaDecoderLayer(te.pytorch.TransformerLayer):
         te_rope = RotaryPositionEmbedding(config.hidden_size // config.num_attention_heads)
         self.te_rope_emb = te_rope(max_seq_len=config.max_position_embeddings).cuda()
 
-    def forward(self, hidden_states, *args, attention_mask, **kwargs):
-        """
-        Custom forward to make sure we only pass relevant arguments to the
-        forward pass of the `TransformerLayer`. Also, make sure the output
-        format matches the output of the HF's `LlamaDecoderLayer`.
-        """
-        return (
-            super().forward(
-                hidden_states, attention_mask=attention_mask, rotary_pos_emb=self.te_rope_emb
-            ),
+    def forward(self, hidden_states, *args, attention_mask=None, **kwargs):
+        # Call TE’s layer
+        hs,_ = hidden_states if isinstance(hidden_states, tuple) else (hidden_states, None)
+        
+        # Return exactly two items as HF expects:
+        return super().forward(
+            hs,
+            attention_mask=attention_mask,
+            rotary_pos_emb=self.te_rope_emb,
         )
 
 
