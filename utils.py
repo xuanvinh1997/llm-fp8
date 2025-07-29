@@ -51,11 +51,15 @@ class HyperParameters:
         # This will be set by snapshot_download
         self.weights_cache_dir = ""
 
+        self.number_samples = None  # Set to None to use the full dataset
+
 
 hyperparams = HyperParameters()
 
 
-def get_train_dataloader(accelerator: Accelerator, hp: HyperParameters):
+def get_dataloader(
+    accelerator: Accelerator, hp: HyperParameters
+):
     dataset = load_dataset(hp.dataset_name, split="train")
     tokenizer = AutoTokenizer.from_pretrained(hp.model_name)
     if getattr(tokenizer, "pad_token", None) is None:
@@ -64,69 +68,53 @@ def get_train_dataloader(accelerator: Accelerator, hp: HyperParameters):
     chat_template = (
         "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
         "You are a helpful assistant that solves math problems step by step. "
-        "Please reason step by step, and put your final answer within \\boxed{{}}." 
+        "Please reason step by step, and put your final answer within \\boxed{{}}."
         "\n<|eot_id|>\n"
         "<|start_header_id|>user<|end_header_id|>\n{problem}\n<|eot_id|>\n"
         "<|start_header_id|>assistant<|end_header_id|>\n{solution}<|eot_id|>"
     )
 
     with accelerator.main_process_first():
+
         def apply_template(ex):
             text = chat_template.format(
-                problem=ex["problem"], solution=ex["generated_solution"],
+                problem=ex["problem"],
+                solution=ex["generated_solution"],
             )
             tokens = tokenizer(
                 text,
                 truncation=True,
                 max_length=hp.max_seq_length,
             )
-            return {"input_ids": tokens["input_ids"], "attention_mask": tokens["attention_mask"]}
+            return {
+                "input_ids": tokens["input_ids"],
+                "attention_mask": tokens["attention_mask"],
+            }
 
         dataset = dataset.map(
             apply_template,
             remove_columns=dataset.column_names,
             num_proc=12,
         )
+    # split into train and eval sets
+    if hyperparams.number_samples is not None:
+        dataset = dataset.select(range(hyperparams.number_samples))
 
+    dataset = dataset.train_test_split(test_size=0.1, seed=42)
+    train_dataset = dataset["train"]
+    eval_dataset = dataset["test"]
     collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
         mlm=False,
         pad_to_multiple_of=16,
     )
     return DataLoader(
-        dataset,
+        train_dataset,
         batch_size=hp.batch_size,
         collate_fn=collator,
         drop_last=True,
-    )
-
-
-def get_eval_dataloader(accelerator: Accelerator, hp: HyperParameters):
-    ds = load_dataset(hp.dataset_name, split=hp.eval_split)
-    tokenizer = AutoTokenizer.from_pretrained(hp.model_name)
-    if getattr(tokenizer, "pad_token", None) is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    with accelerator.main_process_first():
-        def tokenize_fn(ex):
-            return tokenizer(
-                ex[hp.dataset_text_field],
-                truncation=True,
-                max_length=hp.max_seq_length,
-            )
-        ds = ds.map(
-            tokenize_fn,
-            remove_columns=ds.column_names,
-            num_proc=4,
-        )
-
-    collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,
-        pad_to_multiple_of=16,
-    )
-    return DataLoader(
-        ds,
+    ), DataLoader(
+        eval_dataset,
         batch_size=hp.eval_batch_size,
         collate_fn=collator,
     )
@@ -141,6 +129,7 @@ def ensure_model_is_downloaded(hp: HyperParameters):
     ], "Unsupported model!"
 
     from huggingface_hub import login, snapshot_download
+
     try:
         login(hp.hf_access_token)
     except Exception as e:
@@ -159,6 +148,7 @@ def init_model(hp: HyperParameters, use_te: bool = False):
     config._attn_implementation = "flash_attention_2"
     if use_te:
         from te_llama import TELlamaForCausalLM
+
         model = TELlamaForCausalLM.from_pretrained_local(
             hp.weights_cache_dir,
             config=config,
@@ -185,13 +175,10 @@ def wrap_with_accelerator(model, hp: HyperParameters):
         kwargs_handlers=fp8_handler,
     )
 
-    train_loader = get_train_dataloader(accelerator, hp)
-    eval_loader  = get_eval_dataloader(accelerator, hp)
+    train_loader, eval_loader = get_dataloader(accelerator, hp)
 
     num_batches = len(train_loader)
-    total_steps = (
-        num_batches * hp.num_epochs // hp.gradient_accumulation_steps
-    )
+    total_steps = num_batches * hp.num_epochs // hp.gradient_accumulation_steps
 
     optimizer = AdamW(
         params=model.parameters(),
@@ -211,14 +198,19 @@ def wrap_with_accelerator(model, hp: HyperParameters):
 
 
 def finetune_model(
-    model, hp: HyperParameters, accelerator,
-    train_loader, eval_loader, optimizer, scheduler,
-    writer: SummaryWriter
+    model,
+    hp: HyperParameters,
+    accelerator,
+    train_loader,
+    eval_loader,
+    optimizer,
+    scheduler,
+    writer: SummaryWriter,
 ):
     model.train()
     step_count = 0
     start_time = torch.cuda.Event(enable_timing=True)
-    end_time   = torch.cuda.Event(enable_timing=True)
+    end_time = torch.cuda.Event(enable_timing=True)
     torch.cuda.synchronize()
     start_time.record()
 
@@ -262,9 +254,7 @@ def finetune_model(
     writer.flush()
     writer.close()
 
-    accelerator.print(
-        f"Training done: {total_steps} steps, {ms_per_step:.0f} ms/step"
-    )
+    accelerator.print(f"Training done: {total_steps} steps, {ms_per_step:.0f} ms/step")
 
 
 def save_model(model, hp: HyperParameters, accelerator):
@@ -277,16 +267,17 @@ def restart_jupyter_notebook():
     IPython.Application.instance().kernel.do_shutdown(True)
     if torch.cuda.memory_allocated() != 0:
         import warnings
-        warnings.warn(
-            "CUDA memory not freed; retrying via HTML reload..."
-        )
+
+        warnings.warn("CUDA memory not freed; retrying via HTML reload...")
         from IPython.core.display import HTML
+
         HTML("<script>Jupyter.notebook.kernel.restart()</script>")
         if torch.cuda.memory_allocated() != 0:
             print("Please manually restart the Jupyter kernel!")
 
     if not sys.warnoptions:
         import warnings
+
         warnings.simplefilter("ignore")
         torch.set_warn_always(False)
 
