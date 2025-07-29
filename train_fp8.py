@@ -5,6 +5,7 @@
 import time
 import sys
 import IPython
+import wandb
 
 import torch
 from torch.optim import AdamW
@@ -47,6 +48,9 @@ class HyperParameters:
         # Logging & saving
         self.log_dir = "./runs"
         self.output_dir = "./saved_model"
+        self.use_wandb = False
+        self.wandb_project = "llm-fp8"
+        self.wandb_run_name = None
 
         # This will be set by snapshot_download
         self.weights_cache_dir = ""
@@ -213,7 +217,8 @@ def wrap_with_accelerator(model, hp: HyperParameters):
 def finetune_model(
     model, hp: HyperParameters, accelerator,
     train_loader, eval_loader, optimizer, scheduler,
-    writer: SummaryWriter
+    writer: SummaryWriter,
+    wandb_run=None
 ):
     model.train()
     step_count = 0
@@ -226,6 +231,7 @@ def finetune_model(
         accelerator.print(f"Epoch {epoch}/{hp.num_epochs}")
         epoch_loss = 0.0
         for batch in train_loader:
+            step_start = time.perf_counter()
             with accelerator.accumulate(model):
                 outputs = model(**batch)
                 loss = outputs.loss
@@ -235,10 +241,20 @@ def finetune_model(
                 scheduler.step()
                 optimizer.zero_grad()
                 step_count += 1
+            step_duration = time.perf_counter() - step_start
+            mem_mb = torch.cuda.memory_allocated() / (1024 ** 2)
 
-                # log training loss every 50 steps
-                if step_count % 50 == 0:
-                    writer.add_scalar("Train/Loss", loss.item(), step_count)
+            # log training metrics every 50 steps
+            if step_count % 50 == 0:
+                writer.add_scalar("Train/Loss", loss.item(), step_count)
+                writer.add_scalar("Train/StepTime_s", step_duration, step_count)
+                writer.add_scalar("Train/GPU_Memory_MB", mem_mb, step_count)
+                if wandb_run is not None:
+                    wandb_run.log({
+                        "Train/Loss": loss.item(),
+                        "Train/StepTime_s": step_duration,
+                        "Train/GPU_Memory_MB": mem_mb,
+                    }, step=step_count)
 
         # evaluation at end of epoch
         model.eval()
@@ -249,6 +265,8 @@ def finetune_model(
                 eval_loss += outputs.loss.detach().float()
         avg_eval = eval_loss / len(eval_loader)
         writer.add_scalar("Eval/Loss", avg_eval, epoch)
+        if wandb_run is not None:
+            wandb_run.log({"Eval/Loss": avg_eval}, step=step_count)
         accelerator.print(f" Eval loss: {avg_eval:.4f}")
         model.train()
 
@@ -261,6 +279,9 @@ def finetune_model(
     writer.add_scalar("Train/TimePerStep_ms", ms_per_step, 0)
     writer.flush()
     writer.close()
+    if wandb_run is not None:
+        wandb_run.log({"Train/TimePerStep_ms": ms_per_step})
+        wandb_run.finish()
 
     accelerator.print(
         f"Training done: {total_steps} steps, {ms_per_step:.0f} ms/step"
@@ -329,6 +350,12 @@ if __name__ == "__main__":
                         help="Directory for TensorBoard logs")
     parser.add_argument("--output_dir", type=str, default="./saved_model",
                         help="Where to save the fine-tuned model")
+    parser.add_argument("--use_wandb", action="store_true",
+                        help="Enable Weights & Biases logging")
+    parser.add_argument("--wandb_project", type=str, default="llm-fp8",
+                        help="Weights & Biases project name")
+    parser.add_argument("--wandb_run_name", type=str, default=None,
+                        help="Weights & Biases run name")
 
     # weights cache
     parser.add_argument("--weights_cache_dir", type=str, default="",
@@ -352,6 +379,9 @@ if __name__ == "__main__":
     hp.log_dir = args.log_dir
     hp.output_dir = args.output_dir
     hp.weights_cache_dir = args.weights_cache_dir
+    hp.use_wandb = args.use_wandb
+    hp.wandb_project = args.wandb_project
+    hp.wandb_run_name = args.wandb_run_name
 
     # initialize model and accelerator
     model = init_model(hp, use_te=args.use_te)
@@ -360,6 +390,12 @@ if __name__ == "__main__":
 
     # tensorboard writer
     writer = SummaryWriter(log_dir=hp.log_dir)
+    wandb_run = None
+    if hp.use_wandb:
+        wandb_run = wandb.init(project=hp.wandb_project,
+                               name=hp.wandb_run_name,
+                               dir=hp.log_dir,
+                               config=vars(hp))
 
     # fine-tune
     finetune_model(
@@ -371,6 +407,7 @@ if __name__ == "__main__":
         optimizer,
         scheduler,
         writer,
+        wandb_run,
     )
 
     # save final model
