@@ -1,4 +1,4 @@
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES.
 #
 # See LICENSE for license information.
 
@@ -9,6 +9,7 @@ import IPython
 import torch
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from transformers import (
     AutoModelForCausalLM,
@@ -26,257 +27,278 @@ class HyperParameters:
     def __init__(self):
         self.mixed_precision = "bf16"
 
-        # Set to Meta Llama 2 by default.
+        # Model & data
         self.model_name = "meta-llama/Llama-2-7b-hf"
-
         self.dataset_name = "timdettmers/openassistant-guanaco"
         self.dataset_text_field = "text"
+        self.max_seq_length = 256
+
+        # Training hyperparams
         self.learning_rate = 1.41e-5
         self.batch_size = 8
-        self.max_seq_length = 256
         self.gradient_accumulation_steps = 1
-        self.num_warmup_steps = 5
-        self.num_training_steps = 10
+        self.num_epochs = 3
+        self.num_warmup_steps = 100
 
-        # This is either provided by the user or it will be set when the
-        # model weights are downloaded.
+        # Evaluation settings
+        self.eval_split = "validation"
+        self.eval_batch_size = self.batch_size
+
+        # Logging & saving
+        self.log_dir = "./runs"
+        self.output_dir = "./saved_model"
+
+        # This will be set by snapshot_download
         self.weights_cache_dir = ""
 
 
 hyperparams = HyperParameters()
 
 
-def get_dataloaders(accelerator: Accelerator, hyperparams):
-    dataset = load_dataset(hyperparams.dataset_name, split="train")
-    tokenizer = AutoTokenizer.from_pretrained(hyperparams.model_name)
-    chat_template = "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n" + \
-        "You are a helpful assistant that solves math problems step by step. Please reason step by step, and put your final answer within \\boxed{{}}.\n<|eot_id|>\n"+ \
-        "<|start_header_id|>user<|end_header_id|>\n{problem}\n<|eot_id|>\n"+ \
-        "<|start_header_id|>assistant<|end_header_id|>\n{solution}<|eot_id|>"
-    
+def get_train_dataloader(accelerator: Accelerator, hp: HyperParameters):
+    dataset = load_dataset(hp.dataset_name, split="train")
+    tokenizer = AutoTokenizer.from_pretrained(hp.model_name)
     if getattr(tokenizer, "pad_token", None) is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    def tokenize(element):
-        outputs = tokenizer(
-            element["text"],
-            truncation=True,
-            padding=False,
-            max_length=hyperparams.max_seq_length,
-            return_overflowing_tokens=False,
-            return_length=False,
-        )
-        
-
-    with accelerator.main_process_first():
-        def apply_chat_template(example):
-            outputs = tokenizer(
-                chat_template.format(
-                    problem=example["problem"], solution=example["generated_solution"]
-                ),
-                truncation=True,
-                padding=False,
-                max_length=hyperparams.max_seq_length,
-                return_overflowing_tokens=False,
-                return_length=False,
-            )
-            return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
-            
-        dataset = dataset.map(apply_chat_template, remove_columns=dataset.column_names, num_proc=12)
-        # dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.column_names)
-
-    # Simply pad to the multiple of 16 for both FP8 and BF16 precision
-    pad_to_multiple_of = 16
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,
-        pad_to_multiple_of=pad_to_multiple_of,
+    chat_template = (
+        "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n"
+        "You are a helpful assistant that solves math problems step by step. "
+        "Please reason step by step, and put your final answer within \\boxed{{}}." 
+        "\n<|eot_id|>\n"
+        "<|start_header_id|>user<|end_header_id|>\n{problem}\n<|eot_id|>\n"
+        "<|start_header_id|>assistant<|end_header_id|>\n{solution}<|eot_id|>"
     )
 
-    dataloader_params = {
-        "batch_size": hyperparams.batch_size,
-        "collate_fn": data_collator,
-        "drop_last": True,
-    }
-    train_dataloader = DataLoader(dataset, **dataloader_params)
-    return train_dataloader
+    with accelerator.main_process_first():
+        def apply_template(ex):
+            text = chat_template.format(
+                problem=ex["problem"], solution=ex["generated_solution"],
+            )
+            tokens = tokenizer(
+                text,
+                truncation=True,
+                max_length=hp.max_seq_length,
+            )
+            return {"input_ids": tokens["input_ids"], "attention_mask": tokens["attention_mask"]}
+
+        dataset = dataset.map(
+            apply_template,
+            remove_columns=dataset.column_names,
+            num_proc=12,
+        )
+
+    collator = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer,
+        mlm=False,
+        pad_to_multiple_of=16,
+    )
+    return DataLoader(
+        dataset,
+        batch_size=hp.batch_size,
+        collate_fn=collator,
+        drop_last=True,
+    )
 
 
-def ensure_model_is_downloaded(hyperparams):
-    assert hyperparams.model_name in [
+def get_eval_dataloader(accelerator: Accelerator, hp: HyperParameters):
+    ds = load_dataset(hp.dataset_name, split=hp.eval_split)
+    tokenizer = AutoTokenizer.from_pretrained(hp.model_name)
+    if getattr(tokenizer, "pad_token", None) is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    with accelerator.main_process_first():
+        def tokenize_fn(ex):
+            return tokenizer(
+                ex[hp.dataset_text_field],
+                truncation=True,
+                max_length=hp.max_seq_length,
+            )
+        ds = ds.map(
+            tokenize_fn,
+            remove_columns=ds.column_names,
+            num_proc=4,
+        )
+
+    collator = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer,
+        mlm=False,
+        pad_to_multiple_of=16,
+    )
+    return DataLoader(
+        ds,
+        batch_size=hp.eval_batch_size,
+        collate_fn=collator,
+    )
+
+
+def ensure_model_is_downloaded(hp: HyperParameters):
+    assert hp.model_name in [
         "meta-llama/Meta-Llama-3-8B",
         "meta-llama/Llama-3.2-1B",
         "meta-llama/Llama-3.2-3B",
         "meta-llama/Llama-2-7b-hf",
-    ], "Only Meta Llama 2 7B and Meta Llama 3 8B models are supported!"
+    ], "Unsupported model!"
 
-    # Login using Huggingface Hub API
-    from huggingface_hub import login
-
+    from huggingface_hub import login, snapshot_download
     try:
-        login(hyperparams.hf_access_token)
+        login(hp.hf_access_token)
     except Exception as e:
-        if "Invalid token passed!" in str(e):
-            print(
-                "Please pass a valid HF Access Token! More info at"
-                " https://huggingface.co/docs/hub/en/security-tokens."
-            )
-        else:
-            print(f"Exception is {e}")
+        print(f"HF login issue: {e}")
 
-    # Download the model if it doesn't exist
-    from huggingface_hub import snapshot_download
-
-    supplied_cache_dir = (
-        hyperparams.weights_cache_dir if hyperparams.weights_cache_dir != "" else None
+    hp.weights_cache_dir = snapshot_download(
+        repo_id=hp.model_name,
+        cache_dir=(hp.weights_cache_dir or None),
     )
-    hyperparams.weights_cache_dir = snapshot_download(
-        repo_id=hyperparams.model_name, cache_dir=supplied_cache_dir
-    )
-
-    print(f"Model cache directory : {hyperparams.weights_cache_dir}")
+    print(f"Model cached at: {hp.weights_cache_dir}")
 
 
-def init_baseline_model(hyperparams):
-    # Download and cache the weights
-    ensure_model_is_downloaded(hyperparams)
-
-    # Init the model
-    config = AutoConfig.from_pretrained(hyperparams.weights_cache_dir)
-    # make sure to use flash_attention to do iso comparison with TELlamaModel
+def init_model(hp: HyperParameters, use_te: bool = False):
+    ensure_model_is_downloaded(hp)
+    config = AutoConfig.from_pretrained(hp.weights_cache_dir)
     config._attn_implementation = "flash_attention_2"
-    model = AutoModelForCausalLM.from_pretrained(
-        hyperparams.weights_cache_dir,
-        config=config,
-        torch_dtype=torch.bfloat16,
-    )
+    if use_te:
+        from te_llama import TELlamaForCausalLM
+        model = TELlamaForCausalLM.from_pretrained_local(
+            hp.weights_cache_dir,
+            config=config,
+            torch_dtype=torch.bfloat16,
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            hp.weights_cache_dir,
+            config=config,
+            torch_dtype=torch.bfloat16,
+        )
     model = model.cuda()
-    # Needed for the cases when using TELlamaForCausalLM. So adding here for 1:1 comparison
     model.config.use_cache = False
-
     return model
 
 
-def init_te_llama_model(hyperparams):
-    # Download and cache the weights
-    ensure_model_is_downloaded(hyperparams)
-
-    # Init the model
-    from te_llama import TELlamaForCausalLM
-
-    config = AutoConfig.from_pretrained(hyperparams.weights_cache_dir)
-    config._attn_implementation = "flash_attention_2"
-    model = TELlamaForCausalLM.from_pretrained_local(
-        hyperparams.weights_cache_dir,
-        config=config,
-        torch_dtype=torch.bfloat16,
+def wrap_with_accelerator(model, hp: HyperParameters):
+    fp8_handler = (
+        [FP8RecipeKwargs(backend="te")] if hp.mixed_precision == "fp8" else None
     )
-    model = model.cuda()
-    # Needed for the cases when using TELlamaForCausalLM
-    model.config.use_cache = False
-
-    return model
-
-
-def wrap_with_accelerator(model, hyperparams):
-    # Create FP8 kwarg handler if required
-    fp8_kwarg_handler = (
-        [FP8RecipeKwargs(backend="te")] if hyperparams.mixed_precision == "fp8" else None
-    )
-
-    # Init HF accelerator that's used for training
     accelerator = Accelerator(
-        log_with="wandb",
-        gradient_accumulation_steps=hyperparams.gradient_accumulation_steps,
-        mixed_precision=hyperparams.mixed_precision,
-        kwargs_handlers=fp8_kwarg_handler,
+        gradient_accumulation_steps=hp.gradient_accumulation_steps,
+        mixed_precision=hp.mixed_precision,
+        kwargs_handlers=fp8_handler,
     )
-    # accelerator.print(f'State: {accelerator.state}')
-    train_dataloader = get_dataloaders(accelerator, hyperparams)
 
-    # Wrap model, optimizer/scheduler, dataloaders in accelerate
-    optimizer = AdamW(params=model.parameters(), lr=hyperparams.learning_rate, fused=True)
-    lr_scheduler = get_linear_schedule_with_warmup(
+    train_loader = get_train_dataloader(accelerator, hp)
+    eval_loader  = get_eval_dataloader(accelerator, hp)
+
+    num_batches = len(train_loader)
+    total_steps = (
+        num_batches * hp.num_epochs // hp.gradient_accumulation_steps
+    )
+
+    optimizer = AdamW(
+        params=model.parameters(),
+        lr=hp.learning_rate,
+        fused=True,
+    )
+    scheduler = get_linear_schedule_with_warmup(
         optimizer=optimizer,
-        num_warmup_steps=100,
-        num_training_steps=hyperparams.num_training_steps,
-    )
-    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, lr_scheduler
+        num_warmup_steps=hp.num_warmup_steps,
+        num_training_steps=total_steps,
     )
 
-    return accelerator, model, optimizer, train_dataloader, lr_scheduler
+    model, optimizer, train_loader, scheduler, eval_loader = accelerator.prepare(
+        model, optimizer, train_loader, scheduler, eval_loader
+    )
+    return accelerator, model, optimizer, train_loader, scheduler, eval_loader
 
 
-def finetune_model(model, hyperparams, accelerator, train_dataloader, optimizer, lr_scheduler):
+def finetune_model(
+    model, hp: HyperParameters, accelerator,
+    train_loader, eval_loader, optimizer, scheduler,
+    writer: SummaryWriter
+):
     model.train()
-    total_loss = 0
-    optimizer.zero_grad()
-    train_dataloader = enumerate(train_dataloader)
-
-    # Warmup iters
-    for _ in range(hyperparams.num_warmup_steps):
-        step, batch = next(train_dataloader)
-        with accelerator.accumulate(model):
-            outputs = model(**batch)
-            loss = outputs.loss
-            total_loss += loss.detach().float()
-            accelerator.backward(loss)
-            optimizer.step()
-            lr_scheduler.step()
-            optimizer.zero_grad()
-
-    # Get the timers ready
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
+    step_count = 0
+    start_time = torch.cuda.Event(enable_timing=True)
+    end_time   = torch.cuda.Event(enable_timing=True)
     torch.cuda.synchronize()
+    start_time.record()
 
-    start.record()
-    # Training iters
-    for _ in range(hyperparams.num_training_steps):
-        step, batch = next(train_dataloader)
-        with accelerator.accumulate(model):
-            outputs = model(**batch)
-            loss = outputs.loss
-            total_loss += loss.detach().float()
-            accelerator.backward(loss)
-            optimizer.step()
-            lr_scheduler.step()
-            optimizer.zero_grad()
+    for epoch in range(1, hp.num_epochs + 1):
+        accelerator.print(f"Epoch {epoch}/{hp.num_epochs}")
+        epoch_loss = 0.0
+        for batch in train_loader:
+            with accelerator.accumulate(model):
+                outputs = model(**batch)
+                loss = outputs.loss
+                epoch_loss += loss.detach().float()
+                accelerator.backward(loss)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+                step_count += 1
+
+                # log training loss every 50 steps
+                if step_count % 50 == 0:
+                    writer.add_scalar("Train/Loss", loss.item(), step_count)
+
+        # evaluation at end of epoch
+        model.eval()
+        eval_loss = 0.0
+        with torch.no_grad():
+            for batch in eval_loader:
+                outputs = model(**batch)
+                eval_loss += outputs.loss.detach().float()
+        avg_eval = eval_loss / len(eval_loader)
+        writer.add_scalar("Eval/Loss", avg_eval, epoch)
+        accelerator.print(f" Eval loss: {avg_eval:.4f}")
+        model.train()
+
     torch.cuda.synchronize()
-    end.record()
+    end_time.record()
     accelerator.end_training()
 
-    print(
-        f"{hyperparams.num_training_steps} finetuning steps complete!\nAverage time taken per step:"
-        f" {(start.elapsed_time(end)/hyperparams.num_training_steps):.0f} milliseconds"
+    total_steps = step_count
+    ms_per_step = start_time.elapsed_time(end_time) / total_steps
+    writer.add_scalar("Train/TimePerStep_ms", ms_per_step, 0)
+    writer.flush()
+    writer.close()
+
+    accelerator.print(
+        f"Training done: {total_steps} steps, {ms_per_step:.0f} ms/step"
     )
+
+
+def save_model(model, hp: HyperParameters, accelerator):
+    model_to_save = accelerator.unwrap_model(model)
+    model_to_save.save_pretrained(hp.output_dir)
+    print(f"Model saved to: {hp.output_dir}")
 
 
 def restart_jupyter_notebook():
-    # Try restarting the Jupyter kernel
     IPython.Application.instance().kernel.do_shutdown(True)
-
-    # Check whether the device memory has been flushed
     if torch.cuda.memory_allocated() != 0:
         import warnings
-
-        warnings.warn("The device memory hasn't been flushed, trying with a second method!")
-
-        # Try restarting the Jupyter kernel another way
-        # Restart the kernel
+        warnings.warn(
+            "CUDA memory not freed; retrying via HTML reload..."
+        )
         from IPython.core.display import HTML
-
         HTML("<script>Jupyter.notebook.kernel.restart()</script>")
-
         if torch.cuda.memory_allocated() != 0:
-            print(
-                "The device memory hasn't been flushed, try manually restarting the Jupyter kernel!"
-            )
+            print("Please manually restart the Jupyter kernel!")
 
-    # Suppress the warnings
     if not sys.warnoptions:
         import warnings
-
         warnings.simplefilter("ignore")
         torch.set_warn_always(False)
+
+
+# if __name__ == "__main__":
+#     model = init_model(hyperparams, use_te=False)
+#     accelerator, model, opt, train_loader, sched, eval_loader = wrap_with_accelerator(
+#         model, hyperparams
+#     )
+#     writer = SummaryWriter(log_dir=hyperparams.log_dir)
+#     finetune_model(
+#         model, hyperparams, accelerator,
+#         train_loader, eval_loader, opt, sched, writer
+#     )
+#     save_model(model, hyperparams, accelerator)
