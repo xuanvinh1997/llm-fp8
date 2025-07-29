@@ -49,6 +49,11 @@ hyperparams = HyperParameters()
 def get_dataloaders(accelerator: Accelerator, hyperparams):
     dataset = load_dataset(hyperparams.dataset_name, split="train")
     tokenizer = AutoTokenizer.from_pretrained(hyperparams.model_name)
+    chat_template = "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n" + \
+        "You are a helpful assistant that solves math problems step by step. Please reason step by step, and put your final answer within \\boxed{{}}.\n<|eot_id|>\n"+ \
+        "<|start_header_id|>user<|end_header_id|>\n{problem}\n<|eot_id|>\n"+ \
+        "<|start_header_id|>assistant<|end_header_id|>\n{solution}<|eot_id|>"
+    
     if getattr(tokenizer, "pad_token", None) is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -61,10 +66,24 @@ def get_dataloaders(accelerator: Accelerator, hyperparams):
             return_overflowing_tokens=False,
             return_length=False,
         )
-        return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
+        
 
     with accelerator.main_process_first():
-        dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.column_names)
+        def apply_chat_template(example):
+            outputs = tokenizer(
+                chat_template.format(
+                    problem=example["problem"], solution=example["generated_solution"]
+                ),
+                truncation=True,
+                padding=False,
+                max_length=hyperparams.max_seq_length,
+                return_overflowing_tokens=False,
+                return_length=False,
+            )
+            return {"input_ids": outputs["input_ids"], "attention_mask": outputs["attention_mask"]}
+            
+        dataset = dataset.map(apply_chat_template, remove_columns=dataset.column_names, num_proc=12)
+        # dataset = dataset.map(tokenize, batched=True, remove_columns=dataset.column_names)
 
     # Simply pad to the multiple of 16 for both FP8 and BF16 precision
     pad_to_multiple_of = 16
