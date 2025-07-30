@@ -54,6 +54,7 @@ class HyperParameters:
 
         # This will be set by snapshot_download
         self.weights_cache_dir = ""
+        self.num_proc = 16
 
 
 hyperparams = HyperParameters()
@@ -89,7 +90,7 @@ def get_train_dataloader(accelerator: Accelerator, hp: HyperParameters):
         dataset = dataset.map(
             apply_template,
             remove_columns=dataset.column_names,
-            num_proc=4,
+            num_proc=hp.num_proc,
         )
 
     collator = DataCollatorForLanguageModeling(
@@ -121,7 +122,7 @@ def get_eval_dataloader(accelerator: Accelerator, hp: HyperParameters):
         ds = ds.map(
             tokenize_fn,
             remove_columns=ds.column_names,
-            num_proc=4,
+            num_proc=hp.num_proc,
         )
 
     collator = DataCollatorForLanguageModeling(
