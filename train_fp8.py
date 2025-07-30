@@ -7,6 +7,7 @@ import sys
 import IPython
 from click import Tuple
 import wandb
+import tqdm
 
 import torch
 from torch.optim import AdamW
@@ -24,7 +25,16 @@ from datasets import load_dataset
 from accelerate import Accelerator
 from accelerate.utils.dataclasses import FP8RecipeKwargs
 
+import subprocess
 
+def get_gpu_memory():
+    result = subprocess.run(
+        ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,nounits,noheader"],
+        stdout=subprocess.PIPE, text=True
+    )
+    mem_list = result.stdout.strip().split('\n')
+    # Returns a list of memory usage for each GPU
+    return [int(x) for x in mem_list]
 class HyperParameters:
     def __init__(self):
         self.mixed_precision = "bf16"
@@ -208,57 +218,64 @@ def finetune_model(
     torch.cuda.synchronize()
     start_time.record()
 
-    for epoch in range(1, hp.num_epochs + 1):
-        accelerator.print(f"Epoch {epoch}/{hp.num_epochs}")
-        epoch_loss = 0.0
-        for batch in train_loader:
-            step_start = time.perf_counter()
-            with accelerator.accumulate(model):
-                outputs = model(**batch)
-                loss = outputs.loss
-                if not torch.isfinite(loss):
-                    accelerator.print("Non-finite loss detected, stopping training.")
-                    return
-                epoch_loss += loss.detach().float()
-                accelerator.backward(loss)
-                accelerator.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad()
-                step_count += 1
-            step_duration = time.perf_counter() - step_start
-            mem_mb = torch.cuda.memory_allocated() / (1024 ** 2)
+    total_steps = len(train_loader) * hp.num_epochs // hp.gradient_accumulation_steps
 
-            # log training metrics every 50 steps
-            if step_count % 50 == 0:
-                writer.add_scalar("Train/Loss", loss.item(), step_count)
-                writer.add_scalar("Train/StepTime_s", step_duration, step_count)
-                writer.add_scalar("Train/GPU_Memory_MB", mem_mb, step_count)
-                if wandb_run is not None:
-                    wandb_run.log({
-                        "Train/Loss": loss.item(),
-                        "Train/StepTime_s": step_duration,
-                        "Train/GPU_Memory_MB": mem_mb,
-                    }, step=step_count)
-                accelerator.print(
-                    f"Step {step_count}: "
-                    f"loss={loss.item():.4f}, "
-                    f"step_time={step_duration:.2f}s, "
-                    f"gpu_mem={mem_mb:.0f}MB"
-                )
-        # evaluation at end of epoch
-        model.eval()
-        eval_loss = 0.0
-        with torch.no_grad():
-            for batch in eval_loader:
-                outputs = model(**batch)
-                eval_loss += outputs.loss.detach().float()
-        avg_eval = eval_loss / len(eval_loader)
-        writer.add_scalar("Eval/Loss", avg_eval, epoch)
-        if wandb_run is not None:
-            wandb_run.log({"Eval/Loss": avg_eval}, step=step_count)
-        accelerator.print(f" Eval loss: {avg_eval:.4f}")
-        model.train()
+    # Wrap the training steps with tqdm
+    with tqdm.tqdm(total=total_steps, desc="Training", unit="step") as pbar:
+        for epoch in range(1, hp.num_epochs + 1):
+            accelerator.print(f"Epoch {epoch}/{hp.num_epochs}")
+            epoch_loss = 0.0
+            for batch in train_loader:
+                step_start = time.perf_counter()
+                with accelerator.accumulate(model):
+                    outputs = model(**batch)
+                    loss = outputs.loss
+                    if not torch.isfinite(loss):
+                        accelerator.print("Non-finite loss detected, stopping training.")
+                        return
+                    epoch_loss += loss.detach().float()
+                    accelerator.backward(loss)
+                    accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad()
+                    step_count += 1
+                    pbar.update(1)
+                    pbar.set_postfix(loss=loss.item())
+                step_duration = time.perf_counter() - step_start
+                mem_mb = get_gpu_memory()[0] # Convert to MB
+
+                # log training metrics every 50 steps
+                if step_count % 50 == 0:
+                    writer.add_scalar("Train/Loss", loss.item(), step_count)
+                    writer.add_scalar("Train/StepTime_s", step_duration, step_count)
+                    writer.add_scalar("Train/GPU_Memory_MB", mem_mb, step_count)
+                    if wandb_run is not None:
+                        wandb_run.log({
+                            "Train/Loss": loss.item(),
+                            "Train/StepTime_s": step_duration,
+                            "Train/GPU_Memory_MB": mem_mb,
+                            "Train/Progress": step_count / total_steps,
+                        }, step=step_count)
+                    accelerator.print(
+                        f"Step {step_count}: "
+                        f"loss={loss.item():.4f}, "
+                        f"step_time={step_duration:.2f}s, "
+                        f"gpu_mem={mem_mb:.0f}MB"
+                    )
+            # evaluation at end of epoch
+            model.eval()
+            eval_loss = 0.0
+            with torch.no_grad():
+                for batch in eval_loader:
+                    outputs = model(**batch)
+                    eval_loss += outputs.loss.detach().float()
+            avg_eval = eval_loss / len(eval_loader)
+            writer.add_scalar("Eval/Loss", avg_eval, epoch)
+            if wandb_run is not None:
+                wandb_run.log({"Eval/Loss": avg_eval}, step=step_count)
+            accelerator.print(f" Eval loss: {avg_eval:.4f}")
+            model.train()
 
     torch.cuda.synchronize()
     end_time.record()
