@@ -56,6 +56,7 @@ class HyperParameters:
         # This will be set by snapshot_download
         self.weights_cache_dir = ""
         self.num_proc = 48
+        self.num_of_samples = None
 
 
 hyperparams = HyperParameters()
@@ -63,6 +64,8 @@ hyperparams = HyperParameters()
 
 def get_dataloader(accelerator: Accelerator, hp: HyperParameters) -> tuple[DataLoader, DataLoader] | None:
     dataset = load_dataset(hp.dataset_name, split="train")
+    if hp.num_of_samples is not None:
+        dataset = dataset.select(range(hp.num_of_samples))
     tokenizer = AutoTokenizer.from_pretrained(hp.model_name)
     if getattr(tokenizer, "pad_token", None) is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -233,7 +236,12 @@ def finetune_model(
                         "Train/StepTime_s": step_duration,
                         "Train/GPU_Memory_MB": mem_mb,
                     }, step=step_count)
-
+                accelerator.print(
+                    f"Step {step_count}: "
+                    f"loss={loss.item():.4f}, "
+                    f"step_time={step_duration:.2f}s, "
+                    f"gpu_mem={mem_mb:.0f}MB"
+                )
         # evaluation at end of epoch
         model.eval()
         eval_loss = 0.0
