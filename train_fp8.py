@@ -5,6 +5,7 @@
 import time
 import sys
 import IPython
+from click import Tuple
 import wandb
 
 import torch
@@ -54,13 +55,13 @@ class HyperParameters:
 
         # This will be set by snapshot_download
         self.weights_cache_dir = ""
-        self.num_proc = 16
+        self.num_proc = 48
 
 
 hyperparams = HyperParameters()
 
 
-def get_train_dataloader(accelerator: Accelerator, hp: HyperParameters):
+def get_dataloader(accelerator: Accelerator, hp: HyperParameters) -> tuple[DataLoader, DataLoader] | None:
     dataset = load_dataset(hp.dataset_name, split="train")
     tokenizer = AutoTokenizer.from_pretrained(hp.model_name)
     if getattr(tokenizer, "pad_token", None) is None:
@@ -92,49 +93,26 @@ def get_train_dataloader(accelerator: Accelerator, hp: HyperParameters):
             remove_columns=dataset.column_names,
             num_proc=hp.num_proc,
         )
-
+    # split into train and validation sets
+    dataset = dataset.train_test_split(test_size=0.1, seed=42)
+    train_dataset = dataset["train"]
+    eval_dataset = dataset["test"]
     collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
         mlm=False,
         pad_to_multiple_of=16,
     )
-    return DataLoader(
-        dataset,
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=hp.batch_size,
         collate_fn=collator,
-        drop_last=True,
-    )
-
-
-def get_eval_dataloader(accelerator: Accelerator, hp: HyperParameters):
-    ds = load_dataset(hp.dataset_name, split=hp.eval_split)
-    tokenizer = AutoTokenizer.from_pretrained(hp.model_name)
-    if getattr(tokenizer, "pad_token", None) is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    with accelerator.main_process_first():
-        def tokenize_fn(ex):
-            return tokenizer(
-                ex[hp.dataset_text_field],
-                truncation=True,
-                max_length=hp.max_seq_length,
-            )
-        ds = ds.map(
-            tokenize_fn,
-            remove_columns=ds.column_names,
-            num_proc=hp.num_proc,
-        )
-
-    collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,
-        pad_to_multiple_of=16,
-    )
-    return DataLoader(
-        ds,
+        shuffle=True,)
+    eval_loader = DataLoader(
+        eval_dataset,
         batch_size=hp.eval_batch_size,
         collate_fn=collator,
     )
+    return train_loader, eval_loader
 
 
 def ensure_model_is_downloaded(hp: HyperParameters):
@@ -190,8 +168,7 @@ def wrap_with_accelerator(model, hp: HyperParameters):
         kwargs_handlers=fp8_handler,
     )
 
-    train_loader = get_train_dataloader(accelerator, hp)
-    eval_loader  = get_eval_dataloader(accelerator, hp)
+    train_loader, eval_loader = get_dataloader(accelerator, hp)
 
     num_batches = len(train_loader)
     total_steps = (
