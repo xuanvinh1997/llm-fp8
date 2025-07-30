@@ -216,8 +216,12 @@ def finetune_model(
             with accelerator.accumulate(model):
                 outputs = model(**batch)
                 loss = outputs.loss
+                if not torch.isfinite(loss):
+                    accelerator.print("Non-finite loss detected, stopping training.")
+                    return
                 epoch_loss += loss.detach().float()
                 accelerator.backward(loss)
+                accelerator.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
@@ -320,6 +324,10 @@ if __name__ == "__main__":
                         help="Per-device batch size for training")
     parser.add_argument("--eval_batch_size", type=int,
                         help="Per-device batch size for evaluation (defaults to train batch_size)")
+
+    # --max_length
+    parser.add_argument("--max_seq_length", type=int, default=256,
+                        help="Maximum sequence length for input text")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
                         help="Gradient accumulation steps")
     parser.add_argument("--num_epochs", type=int, default=3,
@@ -330,6 +338,10 @@ if __name__ == "__main__":
                         help="Number of warmup steps for scheduler")
     parser.add_argument("--eval_split", type=str, default="validation",
                         help="Dataset split to use for evaluation")
+    
+    # num of samples
+    parser.add_argument("--num_of_samples", type=int, default=None,
+                        help="Number of samples to use from the dataset (for debugging)")
 
     # logging & saving
     parser.add_argument("--log_dir", type=str, default="./runs",
@@ -365,6 +377,8 @@ if __name__ == "__main__":
     hp.log_dir = args.log_dir
     hp.output_dir = args.output_dir
     hp.weights_cache_dir = args.weights_cache_dir
+    hp.max_seq_length = args.max_seq_length
+    hp.num_of_samples = args.num_of_samples
     hp.use_wandb = args.use_wandb
     hp.wandb_project = args.wandb_project
     hp.wandb_run_name = args.wandb_run_name
