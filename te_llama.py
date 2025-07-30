@@ -38,51 +38,48 @@ def replace_decoder(te_decoder_cls):
         transformers.models.llama.modeling_llama.LlamaDecoderLayer = original_llama_decoder_cls
 attn_recipe = DelayedScaling(fp8_format=Format.HYBRID, amax_history_len=16, amax_compute_algo="max")
 mlp_recipe = DelayedScaling(fp8_format=Format.E4M3, amax_history_len=16, amax_compute_algo="max")
-
-
-
-class TELlamaDecoderLayer(te.pytorch.TransformerLayer):
-    """
-    Wrapper class over TE's `TransformerLayer`. This makes the wrapper very
-    similar to HF's `LlamaDecoderLayer` and easier to replace it in the code.
-
-    Args:
-        config: LlamaConfig
-        args: positional args (for compatibility with `LlamaDecoderLayer`)
-        kwargs: keyword args (for compatibility with `LlamaDecoderLayer`)
-    """
-
-    def __init__(self, config, *args, **kwargs):
-        super().__init__(
-            hidden_size=config.hidden_size,
-            ffn_hidden_size=config.intermediate_size,
+class TELlamaDecoderLayer(torch.nn.Module):
+    def __init__(self, config, *args, dropout_rate=0.0, **kwargs):
+        super().__init__()
+        te.pytorch.TransformerLayer
+        self.self_attention = te.pytorch.MultiheadAttention(
+            hidden_size=config.hidden_size, 
             num_attention_heads=config.num_attention_heads,
             bias=False,
             layernorm_epsilon=config.rms_norm_eps,
-            hidden_dropout=0,
-            attention_dropout=0,
+            attention_dropout=dropout_rate,
             fuse_qkv_params=False,
             normalization="RMSNorm",
-            activation="swiglu",
-            attn_input_format="bshd",
             num_gqa_groups=config.num_key_value_heads,
+            qkv_format="bshd",
+            input_layernorm=True
         )
+
+        self.layernorm_mlp = te.pytorch.LayerNormMLP(
+            hidden_size=config.hidden_size, 
+            ffn_hidden_size=config.intermediate_size,
+            normalization="RMSNorm",
+            activation="swiglu",
+        )
+
         te_rope = RotaryPositionEmbedding(config.hidden_size // config.num_attention_heads)
         self.te_rope_emb = te_rope(max_seq_len=config.max_position_embeddings).cuda()
 
-    def forward(self, hidden_states, attention_mask, *args, **kwargs):
-        """
-        Custom forward to make sure we only pass relevant arguments to the
-        forward pass of the `TransformerLayer`. Also, make sure the output
-        format matches the output of the HF's `LlamaDecoderLayer`.
-        """
-        print(hidden_states)
-        # print(attention_mask)
-        return (
-            super().forward(
-                hidden_states, attention_mask=attention_mask, rotary_pos_emb=self.te_rope_emb
-            ),
-        )
+    def forward(self, hidden_states, attention_mask=None, **kwargs):
+        # check type is fp8
+        if not isinstance(hidden_states, torch.Tensor):
+            raise TypeError("hidden_states must be a torch.Tensor")
+        if attention_mask is not None and not isinstance(attention_mask, torch.Tensor):
+            raise TypeError("attention_mask must be a torch.Tensor")
+        # Define the FP8 recipes for attention and MLP
+        # print("dtype of hidden_states:", hidden_states.dtype)
+        with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=attn_recipe):
+            attn_out = self.self_attention(hidden_states, attention_mask=attention_mask, rotary_pos_emb=self.te_rope_emb)
+        hidden_states = hidden_states + attn_out
+        with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=mlp_recipe):
+            ffn_out = self.layernorm_mlp(hidden_states)
+        hidden_states = hidden_states + ffn_out
+        return hidden_states
 
 
 class TELlamaForCausalLM:
@@ -189,7 +186,7 @@ def replace_params(hf_state_dict, te_state_dict, config):
         m = re.match(layer_prefix_pat, param_key)
         if m is not None:
             all_layer_prefixes.add(m.group())
-
+    # print(te_state_dict.keys())
     for layer_prefix in all_layer_prefixes:
         # When loading weights into models with less number of layers, skip the
         # copy if the corresponding layer doesn't exist in HF model
