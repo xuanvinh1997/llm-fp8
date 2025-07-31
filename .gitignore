@@ -2,3 +2,7 @@ runs/
 __pycache__/
 
 saved_model/
+wandb/
+*.pyc
+*.pyo
+*.pyd
