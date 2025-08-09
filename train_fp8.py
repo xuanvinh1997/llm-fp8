@@ -1,7 +1,3 @@
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES.
-#
-# See LICENSE for license information.
-
 import time
 import sys
 import IPython
