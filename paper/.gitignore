@@ -4,3 +4,12 @@
 *.bbl
 *.fls
 *.out
+*.lot
+*.toc
+*.lof
+*.fdb_latexmk
+*.blg
+*.synctex.gz
+*.nav
+*.snm
+*.pdf
