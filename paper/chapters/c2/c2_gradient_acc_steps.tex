@@ -1,0 +1,26 @@
+\section{Accumulated Gradients}\label{sec:gradacc}
+
+Large LMs quickly outgrow the available GPU memory for training, as their batch sizes in turn blow up, as needed for stable optimization. \emph{Gradient accumulation} circumvents this restriction by dividing the global batch into \(N\) \emph{micro-batches}. Each micro-batch is forwarded and backwarded; and the gradients are sum-accumulated in place. We update the weights and reset the gradient buffers only after the \(N\)-th micro-batch. The model effectively sees a batch size of
+\[
+B_{\mathrm{eff}}=N \cdot B_{\mathrm{micro}},
+\]
+period, but the memory usage is still that of a single micro-batch.
+
+Here’s a naïve pytorch loop: Andbelow is a simple, minimal PyTorch loop. The scalar \(N\) is the \texttt{grad\_accum\_steps}. normalizing by by \(N\) ensures the magnitude of the gradient is unaffected by the accumulation factor, and can be safely removed - the learning rate should simply be rescaled by the accumulation factor.
+
+\begin{minted}{python}
+optimizer.zero_grad()
+for step, micro_batch in enumerate(dataloader):
+# 1. Forward pass & Loss calculation
+outputs = model(micro_batch. inputs)
+loss = compute_loss(outputs, micro_batch. labels)
+# 2. Scale loss for accumulation
+scaled_loss = (loss / grad_accum_steps) #.float() 
+# 3. Backward pass (computes gradients)
+    scaled_loss.backward()
+# 4. if accum is None: Optimizer step (if accumulation cycle is over)
+if (step + 1) \% grad_accum_steps == 0:
+optimizer.step() 
+\end{minted}
+
+The majority of accelerator frameworks (such as Hugging Face \texttt{Accelerate}, DeepSpeed, and PyTorch Lightning) support a native flag for gradient accumulation that replaces the manual bookkeeping above, with correct synchronisation in multi-GPU environments.

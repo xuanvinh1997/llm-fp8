@@ -1,0 +1,16 @@
+\section{Motivation}\label{sec:motivation}
+
+Why are LLMs hard to deploy on edge devices? The fundamental issue is scale. Modern Transformer-based LLMs achieve higher accuracy primarily by scaling up parameter counts and training data. This leads to massive models that strain memory and compute resources. In general, deploying an LLM requires loading all its weights into memory (GPU VRAM or RAM) and performing billions of math operations per inference. Edge devices, however, are constrained in memory (often a few GB) and lack the specialized matrix acceleration of large data-center GPUs.
+
+\subsection{Qwen2.5-1.5B and Efficient Small-Scale LLMs}
+Powerful open-source models such as \textbf{Qwen 2.5} deliver impressive general-purpose performance, yet their accuracy deteriorates once the task domain narrows to highly structured mathematics.  Bridging that gap ordinarily requires full-parameter fine-tuning, a process that is both memory-hungry and compute-intensive for billion-parameter networks.  As a result, research laboratories and edge-computing practitioners alike face prohibitive costs when attempting to adapt state-of-the-art language models to specialized workloads.
+
+Our objective is therefore two-fold: \emph{(i)} preserve the strong reasoning capabilities of Qwen 2.5 on domain-specific maths tasks, and \emph{(ii)} compress the computational footprint so the refined model can run on modest hardware budgets.  Recent accelerator generations provide two complementary avenues for achieving this goal.
+
+\textbf{FP8 training.}  
+NVIDIA Hopper- and AMD CDNA3-class GPUs expose native 8-bit floating-point (FP8) tensor cores.  Training directly in FP8 slashes memory consumption by up to 75 \% relative to FP32 while simultaneously boosting arithmetic throughput, enabling us to iterate on large models without resorting to multi-node clusters.
+
+\textbf{FP8 post-training quantization.}  
+Once fine-tuning converges, we further compress the model by converting all weight tensors from FP16/BF16 to FP8.  This step multiplies the capacity of a given GPU by roughly two, shortens inference latency, and lowers energy draw—without incurring a noticeable loss in perplexity or downstream accuracy.
+
+By combining FP8-aware optimization with post-training quantization, the project demonstrates that \textsc{Qwen 2.5-1.5B} can retain its mathematical reasoning prowess while fitting within the memory envelope of a single H100 NVL or even smaller edge devices, thereby widening access to high-quality, domain-tuned language models.

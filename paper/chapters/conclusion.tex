@@ -1,0 +1,37 @@
+\chapter*{Conclusion} \addcontentsline{toc}{chapter}{Conclusion}
+
+In this scholarly discourse, the optimization of the Qwen2 model has been meticulously examined through the lens of FP8 quantization methodologies, with a particular focus on its applicability for deployment in devices characterized by minimal power consumption. Through extensive experimentation and rigorous analysis, we demonstrate that FP8 quantization represents a compelling strategy for mitigating computational and memory overheads while avoiding significant detriment to performance.
+
+\section*{Results Summary} Our investigation has yielded several critical insights:\\ Training efficiency: The implementation of FP8 quantization enhances training efficiency by approximately 27\% when compared to BF16, and more than doubles the training velocity relative to FP32, while maintaining analogous convergence characteristics and final model quality. This increase in efficiency is further complemented by a 40\% reduction in memory utilization in comparison to FP32 training.
+
+Inference Performance: The model optimized for FP8 exhibits an inference throughput of 102.49 tokens per second (tps), with memory consumption minimized to a compact 1.70 GiB, rendering it 2.5× and 3.4× more rapid and memory-efficient than the FP32 baseline. This notable advancement renders it applicable in contexts that were previously deemed unattainable.
+
+Mathematical Reasoning Preservation: When evaluated against benchmarks such as ARC Challenge, ARC Easy, MATHQA, and Minerva Math, the FP8 model demonstrates competitive accuracy relative to higher precision formats in the majority of scenarios. Although a minor decline in performance was observed on certain complex reasoning tasks, the model's overall capabilities remain largely intact.
+
+Resource-Performance Trade-off: Our findings indicate that FP8 quantization achieves an optimal balance between resource utilization and accuracy when compared to alternative precision formats examined, particularly within the constraints of resource-limited hardware.
+
+\section*{Implications}
+
+It is imperative to acknowledge that the implications of this study extend beyond the specific model and methodologies investigated. First and foremost, the facilitation of robust language models in edge and resource-constrained environments significantly contributes to the democratization of access to artificial intelligence capabilities. Secondly, deploying models at the edge promotes privacy-centric applications by enabling local data processing, thereby obviating the necessity for network communication with distant servers and minimizing latency. Thirdly, the reduction in computational costs associated with FP8 quantization culminates in energy conservation, thereby supporting the advancement of sustainable artificial intelligence solutions. Lastly, while our research primarily concentrated on Qwen2.5-1.5B, the methodologies and conclusions derived are likely extensible to other transformer models, potentially exerting a broader influence on research within the domain of natural language processing.
+
+\section*{Limitations}
+
+Notwithstanding the promising outcomes, our methodology is not devoid of limitations. The FP8 optimization is contingent upon hardware capabilities, necessitating the use of the NVIDIA Hopper architecture or newer iterations equipped with Tensor Cores. We noted a marginal decline in performance on intricate mathematical reasoning tasks, implying that higher precision may be essential for such competencies. Although memory requirements are significantly diminished, the 1.5B parameter model remains excessively large for highly constrained devices such as microcontrollers or low-end smartphones. Furthermore, our evaluation was predominantly centered on mathematics reasoning benchmarks; performance may vary in alternative domains, including creative writing, code generation, or multi-modal reasoning when precision is diminished.
+\section*{Future Work}
+
+We discuss several directions for future work based on the results presented in this paper:\\
+
+Hybrid Precision Approaches: Exploration of mixed precision techniques that would apply different quantization levels on layers depending on their sensitivity could further optimize trade-off between efficiency and performance.
+    
+Combining with other techniques: Studying the synergy between FP8 quantization and other optimization techniques, e.g. pruning, distillation, or sparse attention.
+    
+Optimizations for Dedicated Hardware: tailoring optimizations for given edge hardware platforms, such as custom kernels or operation fusions.
+    
+Dynamic Precision Adaption: Design of dynamic precision adaptation systems, which can vary precision dynamically based on input complexity, battery level or performance requirements, to allow more adaptive deployments.
+    
+Smaller Models: Exploring if the methods discussed in this work be extended to even smaller models (sub-1B parameters) with acceptable task-specific performance.
+    
+Broader Domain Evaluation: Extend evaluation across a broader range of tasks and domains to explore the applicability and constraints of FP8 quantization under more general circumstances.
+\section*{Closing Remarks}
+
+Efficient fine-tuning of large language model in resource-limited settings is an important front in AI. This work shows how to make a powerful model like Qwen2 feasible for deployment using FP8 quantization 1.5B on the edge in these corner cases without giving up their core functionality. As AI technology becomes more pervasive across applications, techniques increasingly able to balance computational efficiency and model performance will be crucial in ensuring such technology's capabilities are fully brought to bear in a wide variety of deployment contexts.

@@ -293,7 +293,15 @@ def finetune_model(
 
 def save_model(model, hp: HyperParameters, accelerator):
     model_to_save = accelerator.unwrap_model(model)
-    model_to_save.save_pretrained(hp.output_dir)
+    model_to_save.save_pretrained(hp.output_dir)  # safe_serialization=True by default if safetensors is installed
+    # Save tokenizer so the directory is fully HF-compatible
+    try:
+        tok = AutoTokenizer.from_pretrained(hp.model_name)
+        if getattr(tok, "pad_token", None) is None and getattr(tok, "eos_token", None) is not None:
+            tok.pad_token = tok.eos_token
+        tok.save_pretrained(hp.output_dir)
+    except Exception as e:
+        print(f"Warning: tokenizer not saved: {e}")
     print(f"Model saved to: {hp.output_dir}")
 
 

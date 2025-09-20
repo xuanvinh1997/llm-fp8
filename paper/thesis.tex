@@ -1,0 +1,111 @@
+\documentclass[a4paper,13pt]{report}
+\usepackage[utf8]{inputenc}
+\usepackage[T5]{fontenc}  % Vietnamese font encoding
+% \usepackage{vietnam}      % Vietnamese language support
+\usepackage{fvextra} 
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+% \usepackage{caption}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{minted}
+
+\usepackage[font=small]{caption}
+\usepackage{booktabs}
+\usepackage[unicode]{hyperref}
+\usepackage[left=3cm,right=2cm,top=2.5cm,bottom=3cm]{geometry}
+\usepackage{titlesec} 
+\usepackage{scrextend}
+\usepackage{enumerate}
+\usepackage{tikz}
+\usepackage{float}
+\usepackage{afterpage}
+\usepackage{multirow}
+\usepackage{sectsty}
+\usepackage{tocloft,calc}
+\usepackage{listings}
+\usepackage{makecell}
+\usepackage[sort&compress]{natbib}
+\usetikzlibrary{calc}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+% \usepackage[perpage]{footmisc}
+\usepackage{perpage} %the perpage package
+\MakePerPage{footnote} %the perpage package command
+% \usepackage[ruled,vlined]{algorithm2e}
+\PassOptionsToPackage{table}{xcolor}
+\setcounter{secnumdepth}{5}
+\def\changemargin#1#2{\list{}{\rightmargin#2\leftmargin#1}\item[]}
+\let\endchangemargin=\endlist 
+
+\changefontsizes{13pt}
+\bibliographystyle{unsrt}
+
+\makeatletter
+\def\l@figure{\@dottedtocline{1}{1em}{2.2em}}
+\def\l@table{\@dottedtocline{1}{1em}{2.2em}}
+\renewcommand*{\ALG@name}{Algorithm}
+\makeatother
+
+\sectionfont{\fontsize{15}{15}\selectfont}
+\subsectionfont{\fontsize{13}{15}\selectfont}
+
+\titleformat{\chapter}[display]   
+{\normalfont\huge\bfseries}{\chaptertitlename\ \thechapter}{0pt}{\LARGE}
+\titlespacing*{\chapter}{0cm}{-\topskip}{0pt}[0pt]
+
+\renewcommand{\baselinestretch}{1.3}
+\renewcommand{\cftchappresnum}{Chapter }
+\AtBeginDocument{\addtolength\cftchapnumwidth{\widthof{\bfseries Chapter }}}
+\setlength{\parskip}{0.4em}
+\setlength{\parindent}{0pt}
+%
+
+%
+\newcommand{\argmax}{\arg\!\max}
+
+\begin{document}
+\input{cover}\newpage\cleardoublepage
+
+% Acknowledgement
+\input{chapters/acknowledgement}\newpage\cleardoublepage
+
+% Abstract
+\input{chapters/abstract_en}\newpage\cleardoublepage
+
+\addcontentsline{toc}{chapter}{Table of contents}
+\tableofcontents\newpage\cleardoublepage
+%
+
+
+
+\newpage
+\input{chapters/glossary}\newpage\cleardoublepage
+%\listoftables
+
+
+%
+% \input{chapters/introduction}\newpage\cleardoublepage
+\input{chapters/c1/c1_introduction}\newpage\cleardoublepage
+\input{chapters/c2/c2_mo}\newpage\cleardoublepage
+\input{chapters/c3/c3_mo_overview}\newpage\cleardoublepage
+\input{chapters/c4/c4_mo_overview}\newpage\cleardoublepage
+\input{chapters/conclusion}\newpage\cleardoublepage
+
+%\nocite{*}
+\phantomsection 
+\addcontentsline{toc}{chapter}{Reference}
+
+\newpage
+\addcontentsline{toc}{chapter}{\listfigurename}
+\listoffigures\cleardoublepage
+
+\newpage
+\addcontentsline{toc}{chapter}{\texorpdfstring{\listtablename}{List of Tables}}
+\listoftables
+
+\bibliography{references}\newpage\cleardoublepage
+\bibliographystyle{plain}
+\end{document}

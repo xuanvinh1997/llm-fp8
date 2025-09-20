@@ -1,0 +1,106 @@
+\section{Quantization}
+
+Quantization refers to mapping high-precision parameters to lower-bit representations, which reduces memory usage and data transfer expenses. In deep learning, quantization may be introduced during the training phase (quantization-aware training) or applied later as a post-training adjustment. Traditional FP32 and FP16 formats continue to be favored during the training of foundational language models, but GPU memory usage becomes a bottleneck since every gradient update is stored at full precision. 
+
+\subsection{BF16}
+
+\textbf{BF16} (brain floating-point 16) compresses FP32 to two bytes while preserving its eight exponent bits.  The mantissa shrinks to seven bits, leaving the dynamic range intact but reducing significant precision. Table~\ref{tab:bf16-layout} compares the bit allocations of FP32, FP16, and BF16.
+
+\begin{table}[htbp]
+\centering
+\caption{Bit layouts of common floating-point formats}
+\label{tab:bf16-layout}
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Format} & \textbf{Sign} & \textbf{Exponent} & \textbf{Mantissa} \\
+\hline
+FP32 & 1 & 8 & 23 \\
+FP16 & 1 & 5 & 10 \\
+\textbf{BF16} & 1 & 8 & 7 \\
+\hline
+\end{tabular}
+\end{table}
+
+Because it shares FP32’s exponent width, BF16 seldom suffers from the underflow or overflow that can plague FP16. Cutting each value to 16 bits halves both memory use and bandwidth demands, yet models often require little or no code change because mainstream frameworks already expose BF16 kernels.
+
+BF16 are supported by the following hardwares: Google TPUs (v2 and beyond), NVIDIA Ampere/Hopper GPUs, and recent Intel CPUs with \texttt{AVX512\_BF16} instructions all execute BF16 natively.
+
+In many large-scale language-model workflows, both forward and backward passes run entirely in BF16, while the optimizer keeps an FP32 “master” copy of the weights to safeguard numerical accuracy.
+
+BF16 values also obey IEEE-754:
+\[
+    \text{value}=(-1)^{\text{sign}}
+        \left(1+\frac{m}{2^{7}}\right)
+        2^{E-127},
+\]
+where \(m\) is the seven-bit mantissa.  Example conversions are shown in Table~\ref{tab:bf16-examples}.
+
+\begin{table}[h!]
+    \centering
+    \begin{tabular}{lccccc}
+        \toprule
+        Format & Original & Sign & Exponent & Mantissa & Decoded \\
+        \midrule
+        BF16 & 0.297896 & 0 & 126 & 38 & 0.2969 \\
+        BF16 & 500.0    & 0 & 136 & 64 & 499.5 \\
+        \bottomrule
+    \end{tabular}
+    \caption{Example BF16 conversions}
+    \label{tab:bf16-examples}
+\end{table}
+
+BF16 captures much of the memory and speed advantage of reduced-precision arithmetic while retaining the robust dynamic range required for the stable optimization of modern language models.
+
+\subsection{FP8}
+ 
+\textbf{FP8} is characterized for being among the families of 8-bit floating points designed for maximum throughput bandwidth\cite{nvidia_fp8_primer}. There are two main layouts. The \textbf{E4M3} version divides the byte into one sign bit and a 4 bits exponent plus a 3 bits mantissa while \textbf{E5M2} moves 1 bit from the mantissa to the exponent, which gives 5 bits for the range and 2 bits for fraction. Table~\ref{tab:fp8-layout} collects both layouts with some of their typical uses in training cycles.
+
+\begin{table}[h]
+
+\centering
+
+\caption{Use of bit layout for FP8 formats}
+
+\label{tab:fp8-layout}
+
+\begin{tabular}{|l|c|c|c|}
+
+\hline
+\textbf{Format} & \textbf{Exponent} & \textbf{Mantissa} & \textbf{Common function} \\ \hline
+E4M3 & 4 & 3 & Forward activations and weights \\ 
+E5M2 & 5 & 2 & Back-propagated gradients \\ 
+
+\hline
+\end{tabular}
+
+\end{table}
+
+
+\textbf{Why FP8?}  
+Storing values in eight bits slashes memory to one-quarter of FP32 and half of FP16/BF16, lightening pressure on GPU DRAM. Hopper-class GPUs (e.g., \ NVIDIA H100) and AMD MI300x embed native FP8 tensor cores that deliver more than three times the throughput of FP16 kernels, while the reduced word size lowers DRAM traffic and power consumption. Consequently, FP8 training often yields simultaneous gains in speed, capacity, and energy efficiency without harming convergence.
+
+Native FP8 execution ships with NVIDIA Hopper (H100/NVL), AMD CDNA3 (MI300x), and several upcoming AI ASICs. Software layers such as \texttt{Transformer Engine} or \texttt{bitsandbytes} wrap these kernels and insert dynamic scaling to keep reduced-precision arithmetic numerically safe.
+
+\textbf{Encoding rule.}  
+Both FP8 layouts follow the standard IEEE-754 recipe
+\[
+    \text{value}=(-1)^{\text{sign}}
+           \left(1+\frac{m}{2^{\text{mantissa}}}\right)
+           2^{E-\text{bias}},
+\]
+with bias 7 for E4M3 and 15 for E5M2.  Table~\ref{tab:fp8-examples} lists a few concrete encodings.
+
+\begin{table}[h!]
+\centering
+\caption{Example FP8 encodings (decimal rounded)}
+\label{tab:fp8-examples}
+\begin{tabular}{lccccc}
+\toprule
+Format & Value$_\text{real}$ & Sign & Exp & Man & Decoded \\ \midrule
+E4M3 & 0.2979 & 0 & 5  & 2 & 0.3125 \\
+E4M3 & 500     & 0 & 14 & 7 & 240   \\
+E5M2 & 0.2979 & 0 & 13 & 1 & 0.3125 \\
+E5M2 & 500     & 0 & 24 & 0 & 512   \\ \bottomrule
+\end{tabular}
+\end{table}
+

@@ -1,0 +1,14 @@
+\begin{MintedVerbatim}[commandchars=\\\{\}]
+\PYG{n}{optimizer}\PYG{o}{.}\PYG{n}{zero\PYGZus{}grad}\PYG{p}{(}\PYG{p}{)}
+\PYG{k}{for} \PYG{n}{step}\PYG{p}{,} \PYG{n}{micro\PYGZus{}batch} \PYG{o+ow}{in} \PYG{n+nb}{enumerate}\PYG{p}{(}\PYG{n}{dataloader}\PYG{p}{)}\PYG{p}{:}
+\PYG{c+c1}{\PYGZsh{} 1. Forward pass \PYGZam{} Loss calculation}
+\PYG{n}{outputs} \PYG{o}{=} \PYG{n}{model}\PYG{p}{(}\PYG{n}{micro\PYGZus{}batch}\PYG{o}{.} \PYG{n}{inputs}\PYG{p}{)}
+\PYG{n}{loss} \PYG{o}{=} \PYG{n}{compute\PYGZus{}loss}\PYG{p}{(}\PYG{n}{outputs}\PYG{p}{,} \PYG{n}{micro\PYGZus{}batch}\PYG{o}{.} \PYG{n}{labels}\PYG{p}{)}
+\PYG{c+c1}{\PYGZsh{} 2. Scale loss for accumulation}
+\PYG{n}{scaled\PYGZus{}loss} \PYG{o}{=} \PYG{p}{(}\PYG{n}{loss} \PYG{o}{/} \PYG{n}{grad\PYGZus{}accum\PYGZus{}steps}\PYG{p}{)} \PYG{c+c1}{\PYGZsh{}.float()}
+\PYG{c+c1}{\PYGZsh{} 3. Backward pass (computes gradients)}
+    \PYG{n}{scaled\PYGZus{}loss}\PYG{o}{.}\PYG{n}{backward}\PYG{p}{(}\PYG{p}{)}
+\PYG{c+c1}{\PYGZsh{} 4. if accum is None: Optimizer step (if accumulation cycle is over)}
+\PYG{k}{if} \PYG{p}{(}\PYG{n}{step} \PYG{o}{+} \PYG{l+m+mi}{1}\PYG{p}{)} \PYGZbs{}\PYG{o}{\PYGZpc{}} \PYG{n}{grad\PYGZus{}accum\PYGZus{}steps} \PYG{o}{==} \PYG{l+m+mi}{0}\PYG{p}{:}
+\PYG{n}{optimizer}\PYG{o}{.}\PYG{n}{step}\PYG{p}{(}\PYG{p}{)}
+\end{MintedVerbatim}

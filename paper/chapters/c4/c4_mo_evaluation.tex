@@ -1,0 +1,26 @@
+\section{Evaluation}\label{sec:evaluation}
+
+This section delineates a thorough examination of the FP8-optimized Qwen2.5-1.5B model across a variety of benchmarks, juxtaposing four distinct configurations: Base (the original FP32), Hybrid (E4M3/E5M2), Pure E4M3, and BF16. The evaluation encompasses both general reasoning tasks (ARC Challenge, ARC Easy) and mathematical reasoning tasks (MATHQA, Minerva Math), thereby elucidating the performance trade-offs associated with diminished precision formats.
+
+\subsection{Benchmark Results}
+
+Table~\ref{tab:benchmark_results} encapsulates the accuracy scores across all benchmarks and configurations. Each configuration underwent assessment over three independent iterations to guarantee statistical reliability, with mean values presented.
+
+\begin{table}[h] \centering \begin{tabular}{llcccc} \toprule \textbf{Task} & \textbf{Base} & \textbf{Hybrid} & \textbf{E4M3} & \textbf{BF16} \\ \midrule ARC Challenge & 0.3362 & \textbf{0.4317} & 0.4292 & 0.4172 \\ ARC Easy & 0.5215 & \textbf{0.7294} & 0.7281 & 0.7277 \\ MATHQA & \textbf{0.4425} & 0.3417 & 0.3343 & 0.3357 \\ Minerva Math & \textbf{0.5104} & 0.2904 & 0.2710 & 0.2584 \\ \bottomrule \end{tabular} \caption{Accuracy comparison of Base, Hybrid, E4M3, and BF16 across tasks (mean of three evaluation runs).} \label{tab:benchmark_results} \end{table}
+
+\subsection{Generalization to New Reasoning Tasks}
+
+A consistent enhancement in performance is discerned for the lower-precision formats in contrast to the Base model across a spectrum of general reasoning benchmarks. In the ARC Challenge, the Hybrid configuration attains an accuracy of 43.17\%, signifying a 9.55 percentage point improvement over the Base model's 33.62\%. The E4M3 configuration demonstrates a comparable performance at 42.92\%, whereas BF16 achieves 41.72\%.
+
+Analogously, on ARC Easy, all three precision-reduced variants surpass the Base model. Each configuration exceeds an accuracy of 72\% (Hybrid: 72.94\%, E4M3: 72.81\%, BF16: 72.77\%) when juxtaposed with the Base model's 52.15\%, illustrating a significant enhancement of over 20 percentage points.
+
+These advancements may be ascribed to multiple factors. Firstly, the diminution in precision might function as a form of implicit regularization, mitigating overfitting to specific numerical patterns and consequently fostering generalization. Secondly, the dynamics of training under lower-precision formats may facilitate a more effective exploration of the optimization landscape, particularly in reasoning-intensive tasks. Lastly, general reasoning tasks such as those encompassed within the ARC benchmark may exhibit reduced sensitivity to precise numerical representation, in contrast to tasks necessitating intricate calculations.
+
+\subsubsection{Analysis of Math Reasoning Tasks}
+
+In contrast to general reasoning tasks, mathematical benchmarks unveil a divergent trend. In MATHQA, the Base model registers the highest accuracy at 44.25\%, while Hybrid, E4M3, and BF16 lag behind with scores of 34.17\%, 33.43\%, and 33.57\%, respectively. The performance disparity in this context is approximately 10–11 percentage points.
+
+This divergence becomes increasingly pronounced on the Minerva Math benchmark, which entails more intricate symbolic reasoning. The Base model attains 51.04\%, whereas Hybrid, E4M3, and BF16 achieve only 29.04\%, 27.10\%, and 25.84\%, respectively—culminating in a performance gap that exceeds 20 percentage points.
+
+
+These empirical observations indicate that tasks requiring mathematical reasoning, especially those that necessitate multi-step calculations and symbolic transformations, exhibit a significantly heightened sensitivity to numerical precision. Various factors may elucidate this heightened sensitivity. Firstly, the accumulation of errors across successive operations can exacerbate inaccuracies when utilizing low-precision formats. Secondly, the constrained representational capacity inherent in FP8 may impede the model's proficiency in discerning subtle numerical distinctions. Lastly, the diminished dynamic range associated with FP8 may precipitate underflow or overflow during intermediate computations that are essential for maintaining mathematical accuracy.

@@ -1,0 +1,68 @@
+\section{SwiGLU Activation}
+\label{sec:swiglu}
+
+\subsection{Definition.}
+The \emph{Swish--Gated Linear Unit} (SwiGLU) \cite{shazeer2020gluvariantsimprovetransformer} combines the gating mechanism of GLU with the smooth \textsc{Swish} activation.  
+Let $\mathbf{x}\!\in\!\mathbb{R}^{d}$ and let the learned weights and biases be
+\(
+W,\,V\!\in\!\mathbb{R}^{d\times d'},\;
+\mathbf{b},\,\mathbf{c}\!\in\!\mathbb{R}^{d'}.
+\)
+For a (typically fixed) slope parameter $\beta>0$,
+\begin{equation}
+  \label{eq:swiglu}
+  \operatorname{SwiGLU}_{\beta}(\mathbf{x})
+  = \bigl(\mathbf{x}W+\mathbf{b}\bigr)\;\sigma\!\bigl(\beta(\mathbf{x}V+\mathbf{c})\bigr),
+  \qquad
+  \sigma(z)=\frac{1}{1+e^{-z}}.
+\end{equation}
+Setting $\beta=1$ recovers the standard \textsc{Swish}; $\beta\!\to\!0$ yields a
+quadratic gate.
+
+\subsection{Practical block.}
+Transformer feed-forward sub-layers ordinarily expand the hidden dimension by a
+factor~$r$ (\textit{e.g.}, $r=4$) and apply a point-wise non-linearity:
+\[
+  \mathbf{h}_\text{mid}=f\!\bigl(\mathbf{x}W_{1}+\mathbf{b}_{1}\bigr),
+  \qquad
+  \mathbf{y}= \mathbf{h}_\text{mid}W_{2}+\mathbf{b}_{2}.
+\]
+With SwiGLU the expansion factor can be reduced to $r=2$ while preserving (or
+improving) perplexity:
+\begin{align}
+  \bigl[\mathbf{g}\,\|\,\mathbf{v}\bigr] &= \mathbf{x}W_{\text{in}}+\mathbf{b}_{\text{in}}, \\
+  \mathbf{h}_\text{mid} &= \operatorname{SwiGLU}_{\beta}(\mathbf{g}) \odot \mathbf{v},\\
+  \mathbf{y} &= \mathbf{h}_\text{mid} W_{\text{out}} + \mathbf{b}_{\text{out}},
+\end{align}
+where $\odot$ denotes element-wise multiplication and
+$W_{\text{in}}\!\in\!\mathbb{R}^{d\times 2d'}$.
+
+\subsection{Reasons for adoption.}
+\vspace{-0.4em}
+\begin{center}
+\begin{tabular}{@{}p{0.32\linewidth}p{0.63\linewidth}@{}}
+\toprule
+\textbf{Property} & \textbf{Observed benefit} \\ \midrule
+Gating of information flow &
+Improves parameter-efficiency; same perplexity with $\sim 10$–$15\%$ fewer hidden units. \\
+Smooth non-monotonic curve &
+Better gradient propagation in >100-layer Transformers; mitigates dying-ReLU effects. \\
+Low computational overhead &
+Adds only one sigmoid and element-wise product, fully fuseable in CUDA/TE kernels. \\
+Empirical gains &
+Adopted by PaLM, LLaMA-2, Qwen-2.5, DeepSeek, showing \mbox{+0.3–0.5} BLEU on WMT-En$\to$De and lower cross-entropy vs.\ GELU. \\ \bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Implementation note.}
+SwiGLU is memory- and compute-friendly: a single fused kernel can realise
+Eqs.~\eqref{eq:swiglu} in mixed precision (BF16/FP8).  
+Support ships with \texttt{FlashAttention\,2}, \texttt{Transformer-Engine}, and
+recent PyTorch \texttt{torch.\allowbreak nn.\allowbreak SiLU} + custom CUDA extensions.
+
+\subsection{When to prefer alternatives.}
+On ultra-low-power microcontrollers lacking hardware sigmoid, ReGLU or ReLU may
+be cheaper.  Under aggressive post-training 4-bit quantisation,
+layer-wise smoothing (e.g.\ SmoothQuant) can reduce the dynamic-range penalty
+introduced by the sigmoid gate.
+

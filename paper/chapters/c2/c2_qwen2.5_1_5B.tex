@@ -1,0 +1,90 @@
+\section{Qwen 2.5 Architecture}\cite{huggingface}
+Qwen 2.5 is a family of decoder-only Transformer language models ranging from
+0.5\,B to 72\,B parameters.  Every variant shares an identical block design that
+combines rotary positional encodings scaled for 128 K tokens, grouped-query
+attention (GQA), SwiGLU feed-forward networks, and RMSNorm
+normalisation.
+
+Table~\ref{tab:qwen25-sizes} summarises the main public checkpoints.  Parameters
+are counted \emph{post-tie}; the input embedding and LM head matrices are
+shared.%
+% :contentReference[oaicite:1]{index=1}
+
+\begin{table}[htbp]
+\centering
+\caption{Key hyper-parameters for Qwen 2.5 model sizes.}
+\label{tab:qwen25-sizes}
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Size & Layers & $d_{\text{model}}$ & Q\,/\,KV~heads & Parameters & Context \\
+\midrule
+0.5 B  & 24 & 1\,536 & 14 / 2 & 0.49 B & 32\,768 \\
+1.5 B  & 28 & 2\,048 & 24 / 4 & 1.54 B & 128\,000 \\
+7 B    & 28 & 4\,096 & 28 / 4 & 7.6 B  & 131\,072 \\
+14 B   & 48 & 5\,120 & 40 / 8 & 14.7 B & 131\,072 \\
+32 B   & 64 & 6\,656 & 40 / 8 & 32.5 B & 131\,072 \\
+72 B   & 80 & 8\,192 & 64 / 8 & 72.7 B & 131\,072 \\
+\bottomrule
+\end{tabular}
+\end{table}%
+% :contentReference[oaicite:2]{index=2}
+
+Qwen 2.5 employs the byte-fallback tokenizer introduced in Qwen 2.0, ensuring
+loss-free round-trips across more than 29 languages as well as source-code
+snippets.  The embedding matrix is tied with the final linear output, reducing
+parameters—and thus memory footprint—by roughly 1 \%.%
+% :contentReference[oaicite:3]{index=3}
+
+Positional information is injected via RoPE rotations.  Following the
+YaRN/NTK-scaling recipe, the frequencies are stretched so the same trained
+weights generalise from the 2 K training window to 128 K tokens at inference
+time without retraining.%
+% :contentReference[oaicite:4]{index=4}
+
+Each decoder block begins with RMSNorm, then applies self-attention with the
+following design decisions:
+
+GQA\footnote{Grouped query attention} For every four query heads, only one key
+and value head is stored.  This division slashes KV-cache memory by a factor of
+up to seven on larger checkpoints while preserving perplexity better than
+single-query MQA.%
+% :contentReference[oaicite:5]{index=5}
+
+QKV Bias Learnable bias terms are added to the projection
+matrices, which empirical studies report to stabilise training at very long
+sequence lengths.%
+% :contentReference[oaicite:6]{index=6}
+
+Sliding / Dual-Chunk Attention for contexts beyond 8 K tokens, the
+model switches to a hybrid of local and global attention to cap the quadratic
+cost.%
+% :contentReference[oaicite:7]{index=7}
+
+The classical two-layer MLP is replaced by a \emph{SwiGLU} gated-activation
+block:
+\[
+\mathrm{MLP}(x)\;=\;W_\text{down}\bigl[\operatorname{SiLU}(xW_\text{gate})
+\odot(xW_\text{up})\bigr].
+\]
+SwiGLU matches or exceeds GeLU perplexity while cutting parameter count by
+$\approx15\%$.%
+% :contentReference[oaicite:8]{index=8}
+
+RMSNorm is used after the input stream and again after the attention output.
+Compared with LayerNorm, RMSNorm avoids mean subtraction, preserving scale
+information that benefits very deep networks and mixed-precision
+training.%
+% :contentReference[oaicite:9]{index=9}
+
+The technical report states that Qwen 2.5 was pre-trained on an
+18-trillion-token multilingual-and-code corpus.  Mixed-precision FP8 was
+internally used to accelerate training, though public weights are released
+in BF16.
+
+\subsection{Block Formula}%
+A single decoder layer computes
+\begin{align}
+h' &= h + \operatorname{Attn}\!\bigl(\operatorname{RMSNorm}(h)\bigr), \\
+h  &= h' + \operatorname{SwiGLU}\!\bigl(\operatorname{RMSNorm}(h')\bigr).
+\end{align}
+

@@ -1,0 +1,10 @@
+\chapter*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+
+This thesis investigates the optimization of Large Language Models (LLMs) for edge devices through FP8 quantization, with a specific focus on the Qwen2.5-1.5B model. While LLMs have demonstrated remarkable capabilities across various tasks, their substantial computational and memory requirements limit deployment in resource-constrained environments. Our research implements NVIDIA's Transformer Engine framework to enable FP8 training and inference, using the E4M3 format for matrix multiplications while maintaining higher precision for operations critical to numerical stability.
+
+Our comprehensive evaluation on benchmarks measuring mathematical reasoning and general intelligence reveals a nuanced trade-off: FP8 quantization significantly reduces memory usage (40.5\% reduction) and accelerates inference (2.1× speedup) compared to FP32, but performance varies by task type. Interestingly, general reasoning tasks show maintained or slightly improved accuracy with FP8, while mathematical reasoning exhibits a 10-20 percentage point drop in precision. This dichotomy suggests that the regularizing effect of lower precision benefits certain task categories while hampering others that require exact numerical calculations.
+
+The thesis contributes to the field in three significant ways: First, it provides a detailed implementation methodology for FP8 quantization of the Qwen2.5 architecture, a procedure that can be extended to similar models. Second, it offers a rigorous empirical analysis of the performance-efficiency trade-offs across different precision formats. Third, it presents application-specific recommendations for deploying optimized LLMs based on resource constraints and task requirements. This work advances the practical deployment of LLMs in resource-limited settings while preserving most of their capabilities, paving the way for wider adoption of these powerful AI systems.
+
+\textbf{Keywords}: \textit{Large Language Models}, \textit{FP8 Quantization}, \textit{Edge Computing}, \textit{Qwen2.5}, \textit{Transformer Engine}, \textit{Model Optimization}
