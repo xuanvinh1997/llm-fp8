@@ -59,6 +59,9 @@ class HyperParameters:
         self.wandb_project = "llm-fp8"
         self.wandb_run_name = None
 
+        # FP8 configuration
+        self.fp8_scenario = "default"
+
         # This will be set by snapshot_download
         self.weights_cache_dir = ""
         self.num_proc = 48
@@ -167,10 +170,50 @@ def init_model(hp: HyperParameters, use_te: bool = False):
     return model
 
 
+def _build_fp8_handler(hp: HyperParameters):
+    if hp.mixed_precision != "fp8":
+        return None
+
+    scenario = getattr(hp, "fp8_scenario", "default")
+    if scenario == "default":
+        return [FP8RecipeKwargs(backend="te")]
+    if scenario == "mxfp8":
+        try:
+            from transformer_engine.common.recipe import DelayedScaling, Format
+        except ImportError as exc:
+            raise RuntimeError(
+                "The MXFP8 scenario requires transformer_engine to be installed."
+            ) from exc
+
+        members = getattr(Format, "__members__", {})
+        mxfp8_options = [
+            member
+            for name, member in members.items()
+            if "MXFP8" in name.upper()
+        ]
+        if not mxfp8_options:
+            import warnings
+
+            warnings.warn(
+                "MXFP8 scenario requested but no MXFP8 format is available in the "
+                "installed transformer_engine package. Falling back to the default "
+                "FP8 recipe.",
+                stacklevel=2,
+            )
+            return [FP8RecipeKwargs(backend="te")]
+
+        recipe = DelayedScaling(
+            fp8_format=mxfp8_options[0],
+            amax_history_len=16,
+            amax_compute_algo="max",
+        )
+        return [FP8RecipeKwargs(recipe=recipe, backend="te")]
+
+    raise ValueError(f"Unsupported FP8 scenario: {scenario}")
+
+
 def wrap_with_accelerator(model, hp: HyperParameters):
-    fp8_handler = (
-        [FP8RecipeKwargs(backend="te")] if hp.mixed_precision == "fp8" else None
-    )
+    fp8_handler = _build_fp8_handler(hp)
     accelerator = Accelerator(
         gradient_accumulation_steps=hp.gradient_accumulation_steps,
         mixed_precision=hp.mixed_precision,
@@ -341,6 +384,13 @@ if __name__ == "__main__":
     # training hyperparams
     parser.add_argument("--mixed_precision", type=str, default="bf16",
                         choices=["bf16", "fp8"], help="Mixed precision mode")
+    parser.add_argument(
+        "--fp8_scenario",
+        type=str,
+        default="default",
+        choices=["default", "mxfp8"],
+        help="FP8 recipe to use when mixed_precision is fp8 (requires Transformer Engine).",
+    )
     parser.add_argument("--batch_size", type=int, default=8,
                         help="Per-device batch size for training")
     parser.add_argument("--eval_batch_size", type=int,
@@ -388,6 +438,7 @@ if __name__ == "__main__":
     hp.dataset_name = args.dataset_name
     hp.dataset_text_field = args.dataset_text_field
     hp.mixed_precision = args.mixed_precision
+    hp.fp8_scenario = args.fp8_scenario
     hp.batch_size = args.batch_size
     hp.eval_batch_size = args.eval_batch_size or args.batch_size
     hp.gradient_accumulation_steps = args.gradient_accumulation_steps
