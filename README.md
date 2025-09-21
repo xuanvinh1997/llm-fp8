@@ -75,6 +75,27 @@ python train_fp8.py \
 
 > **Tip:** Transformer Engine support (`--use_te`) is available for the Meta Llama models. For Qwen2.5 we rely on the standard Hugging Face implementation, so leave `--use_te` unset.
 
+### MXFP8 scenario (Transformer Engine only)
+
+For benchmarks that compare Transformer Engine's MXFP8 recipe against the default FP8 configuration, add the `--fp8_scenario mxfp8` flag alongside `--mixed_precision fp8` and `--use_te`:
+
+```bash
+python train_fp8.py \
+  --model_name meta-llama/Llama-3.2-3B \
+  --dataset_name nvidia/OpenMathInstruct-2 \
+  --batch_size 12 \
+  --mixed_precision fp8 \
+  --fp8_scenario mxfp8 \
+  --max_seq_length 1024 \
+  --num_of_samples 100000 \
+  --use_te \
+  --use_wandb \
+  --wandb_project llm-fp8 \
+  --wandb_run_name llama32-3b-mxfp8
+```
+
+The MXFP8 option falls back to the standard FP8 recipe if the installed `transformer_engine` package does not expose an MXFP8 format.
+
 ## BF16 baseline (optional)
 
 Switch the precision flag to generate a BF16 benchmark run with W&B logging:
