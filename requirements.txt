@@ -1,3 +1,10 @@
 wandb
 tensorboard
 tensorboardX
+click
+datasets
+accelerate
+transformers
+bitsandbytes
+tqdm
+numpy<2
