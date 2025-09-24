@@ -46,6 +46,7 @@ class ModelManager:
         "meta-llama/Llama-3.2-1B",
         "meta-llama/Llama-3.2-3B",
         "Qwen/Qwen2.5-14B",
+        "Qwen/Qwen2.5-1.5B",
     }
     
     def __init__(self, config: TrainingConfig):
