@@ -147,6 +147,12 @@ class TELlamaDecoderLayer(torch.nn.Module):
         rope_obj = self.rope_cache
         if position_ids is None:
             return rope_obj
+        
+        # Clamp position_ids to prevent out of bounds access
+        if position_ids is not None:
+            max_pos = self.rope_cache_len.item() - 1
+            position_ids = torch.clamp(position_ids, 0, max_pos)
+        
         # Slice rope by position_ids if rope is tensor-like
         if isinstance(rope_obj, torch.Tensor):
             # expect shape like (1, max_len, ...) -> index at dim=1
