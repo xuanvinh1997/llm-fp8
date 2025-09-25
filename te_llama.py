@@ -73,7 +73,7 @@ class TELlamaDecoderLayer(torch.nn.Module):
         # Note: we'll ensure device alignment at forward() in case module moved after init
         self.te_rope_emb = te_rope(max_seq_len=config.max_position_embeddings).cuda()
 
-    def forward(self, hidden_states, attention_mask=None, **kwargs):
+    def forward(self, hidden_states, attention_mask=None, position_ids=None, **kwargs):
         # type checks
         if not isinstance(hidden_states, torch.Tensor):
             raise TypeError("hidden_states must be a torch.Tensor")
@@ -84,11 +84,37 @@ class TELlamaDecoderLayer(torch.nn.Module):
         if self.te_rope_emb.device != hidden_states.device:
             self.te_rope_emb = self.te_rope_emb.to(hidden_states.device)
 
+        # Fix attention mask format for TransformerEngine
+        te_attention_mask = None
+        if attention_mask is not None:
+            # Convert from HuggingFace format (batch_size, seq_len) to TE format
+            # TE expects (batch_size, 1, seq_len, seq_len) or (batch_size, num_heads, seq_len, seq_len)
+            batch_size, seq_len = attention_mask.shape
+            
+            # Create causal mask
+            causal_mask = torch.tril(torch.ones(seq_len, seq_len, device=attention_mask.device, dtype=torch.bool))
+            
+            # Expand attention_mask to match causal mask
+            # attention_mask: (batch_size, seq_len) -> (batch_size, 1, 1, seq_len)
+            expanded_mask = attention_mask.unsqueeze(1).unsqueeze(1)
+            
+            # Apply padding mask to causal mask
+            # causal_mask: (seq_len, seq_len) -> (1, 1, seq_len, seq_len)
+            causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)
+            
+            # Combine masks: keep causal structure but mask out padded positions
+            te_attention_mask = causal_mask & expanded_mask
+            
+            # Convert to float and invert (TE uses 0 for masked positions, -inf for attention weights)
+            te_attention_mask = te_attention_mask.float()
+            te_attention_mask = te_attention_mask.masked_fill(te_attention_mask == 0, float('-inf'))
+            te_attention_mask = te_attention_mask.masked_fill(te_attention_mask == 1, 0.0)
+
         # Attention in FP8 (HYBRID)
         with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=attn_recipe):
             attn_out = self.self_attention(
                 hidden_states,
-                attention_mask=attention_mask,
+                attention_mask=te_attention_mask,
                 rotary_pos_emb=self.te_rope_emb,
             )
 
@@ -99,7 +125,7 @@ class TELlamaDecoderLayer(torch.nn.Module):
             ffn_out = self.layernorm_mlp(hidden_states)
 
         hidden_states = hidden_states + ffn_out
-        return hidden_states
+        return (hidden_states,)  # Return tuple to match HuggingFace format
 
 
 class TELlamaForCausalLM:
