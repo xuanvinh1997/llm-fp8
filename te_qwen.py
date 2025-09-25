@@ -105,50 +105,126 @@ class TEQwen3DecoderLayer(torch.nn.Module):
         self.register_buffer("rope_cache", None, persistent=False)
         self.register_buffer("rope_cache_len", torch.tensor(0, dtype=torch.long), persistent=False)
 
-    def _ensure_rope(self, q_len: int, device: torch.device):
-        need_new = (self.rope_cache is None or self.rope_cache.device != device or int(self.rope_cache_len.item()) < q_len)
+    def _ensure_rope(self, q_len: int, device: torch.device, position_ids: Optional[torch.Tensor] = None):
+        # Calculate required cache length considering position_ids
+        required_len = q_len
+        if position_ids is not None:
+            # Handle multi-dimensional position_ids
+            if position_ids.dim() > 1:
+                position_ids = position_ids.view(-1)
+            max_pos = position_ids.max().item() + 1
+            required_len = max(q_len, max_pos)
+        
+        need_new = (self.rope_cache is None or self.rope_cache.device != device or int(self.rope_cache_len.item()) < required_len)
         if need_new:
-            cache = self.rope(max_seq_len=q_len)
+            cache = self.rope(max_seq_len=required_len)
             if isinstance(cache, torch.Tensor):
                 cache = cache.to(device)
             elif isinstance(cache, (tuple, list)):
                 cache = tuple(c.to(device) if isinstance(c, torch.Tensor) else c for c in cache)
             self.rope_cache = cache
-            self.rope_cache_len.fill_(q_len)
+            self.rope_cache_len.fill_(required_len)
 
     def _get_rope_slice(self, q_len: int, device: torch.device, position_ids: Optional[torch.Tensor] = None):
-        self._ensure_rope(q_len, device)
+        self._ensure_rope(q_len, device, position_ids)
         rope_obj = self.rope_cache
         if position_ids is None:
             return rope_obj
+        
+        # Handle multi-dimensional position_ids
+        original_shape = position_ids.shape
+        if position_ids.dim() > 1:
+            position_ids = position_ids.view(-1)
+        
+        # Clamp position_ids to prevent out of bounds access
+        max_pos = self.rope_cache_len.item() - 1
+        position_ids = torch.clamp(position_ids, 0, max_pos)
+        
         if isinstance(rope_obj, torch.Tensor):
-            return rope_obj[:, position_ids, ...]
+            sliced = rope_obj[:, position_ids, ...]
+            # Restore original position_ids shape if needed
+            if len(original_shape) > 1:
+                new_shape = (sliced.shape[0],) + original_shape + sliced.shape[2:]
+                sliced = sliced.view(new_shape)
+            return sliced
         if isinstance(rope_obj, (tuple, list)) and isinstance(rope_obj[0], torch.Tensor):
-            return tuple(comp[:, position_ids, ...] for comp in rope_obj)
+            sliced_components = []
+            for comp in rope_obj:
+                sliced_comp = comp[:, position_ids, ...]
+                if len(original_shape) > 1:
+                    new_shape = (sliced_comp.shape[0],) + original_shape + sliced_comp.shape[2:]
+                    sliced_comp = sliced_comp.view(new_shape)
+                sliced_components.append(sliced_comp)
+            return tuple(sliced_components)
         return rope_obj
 
     @staticmethod
     def _build_causal_bias(q_len: int, k_len: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-        causal = torch.full((q_len, k_len), float('-inf'), device=device, dtype=dtype)
-        causal = torch.triu(causal, diagonal=1)
+        # Create causal mask: mask future positions (upper triangular)
+        # For autoregressive generation with KV cache, q_len might be 1 but k_len > 1
+        if q_len == 1:
+            # During generation, we only attend to all previous tokens
+            causal = torch.zeros((1, k_len), device=device, dtype=dtype)
+        else:
+            # Standard causal mask for training/prefill
+            causal = torch.zeros((q_len, k_len), device=device, dtype=dtype)
+            # Create upper triangular mask with -inf for future positions
+            if q_len == k_len:
+                # Standard case: mask upper triangle (future positions)
+                causal = causal.masked_fill(torch.triu(torch.ones_like(causal, dtype=torch.bool), diagonal=1), float('-inf'))
+            else:
+                # Handle case where q_len != k_len (e.g., when using past_key_values)
+                # We assume k_len >= q_len and that query positions are the last q_len positions
+                for i in range(q_len):
+                    # Position i in query corresponds to position (k_len - q_len + i) in key
+                    start_mask = k_len - q_len + i + 1
+                    if start_mask < k_len:
+                        causal[i, start_mask:] = float('-inf')
+        
         return causal.unsqueeze(0).unsqueeze(0)
 
     @staticmethod
-    def _hf_to_te_mask(attention_mask: torch.Tensor, hidden_states: torch.Tensor) -> torch.Tensor:
+    def _hf_to_te_mask(attention_mask: torch.Tensor, hidden_states: torch.Tensor, past_key_value: Optional[Tuple] = None) -> torch.Tensor:
         if attention_mask is None:
             return None
+        
+        device = hidden_states.device
+        dtype = hidden_states.dtype
+        bsz, q_len, _ = hidden_states.shape
+        
         if attention_mask.dim() == 2:
-            bsz, k_len = attention_mask.shape
-            q_len = hidden_states.size(1)
-            device = hidden_states.device
-            dtype = hidden_states.dtype
+            k_len = attention_mask.shape[1]
+            
+            # Adjust k_len if we have past_key_value
+            if past_key_value is not None and len(past_key_value) >= 2:
+                past_key = past_key_value[0]
+                if past_key is not None:
+                    past_seq_len = past_key.shape[-2]
+                    k_len = past_seq_len + q_len
+            
+            # Build causal mask
             causal = TEQwen3DecoderLayer._build_causal_bias(q_len, k_len, device, dtype)
-            pad = (1 - attention_mask).to(dtype) * -1e9
-            pad = pad[:, None, None, :]
+            
+            # Add padding mask
+            if attention_mask.shape[1] == k_len:
+                pad = (1 - attention_mask).to(dtype) * float('-inf')
+                pad = pad[:, None, None, :]
+            else:
+                # Handle case where attention_mask doesn't match k_len
+                extended_mask = torch.ones(bsz, k_len, device=device, dtype=attention_mask.dtype)
+                if attention_mask.shape[1] <= k_len:
+                    extended_mask[:, -attention_mask.shape[1]:] = attention_mask
+                else:
+                    extended_mask = attention_mask[:, -k_len:]
+                pad = (1 - extended_mask).to(dtype) * float('-inf')
+                pad = pad[:, None, None, :]
+            
             return causal + pad
-        if attention_mask.dim() == 4:
-            return attention_mask.to(device=hidden_states.device, dtype=hidden_states.dtype)
-        raise ValueError(f"Unsupported attention_mask shape: {attention_mask.shape}")
+            
+        elif attention_mask.dim() == 4:
+            return attention_mask.to(device=device, dtype=dtype)
+        else:
+            raise ValueError(f"Unsupported attention_mask shape: {attention_mask.shape}")
 
     def forward(self,
                 hidden_states: torch.Tensor,
@@ -160,8 +236,35 @@ class TEQwen3DecoderLayer(torch.nn.Module):
                 **kwargs):
         bsz, q_len, _ = hidden_states.shape
         device = hidden_states.device
+        
+        # Handle position_ids for KV cache scenarios
+        if position_ids is not None:
+            # Ensure position_ids has the right shape
+            if position_ids.dim() == 1:
+                # Single dimension - expand to match batch size
+                position_ids = position_ids.unsqueeze(0).expand(bsz, -1)
+            elif position_ids.dim() == 2:
+                # Two dimensions - check if we need to expand batch dimension
+                if position_ids.shape[0] == 1 and bsz > 1:
+                    # Single batch entry - expand to match batch size
+                    position_ids = position_ids.expand(bsz, -1)
+                elif position_ids.shape[0] != bsz:
+                    # Different batch sizes that can't be broadcast
+                    if position_ids.shape[0] == 1:
+                        position_ids = position_ids.expand(bsz, -1)
+                    else:
+                        raise ValueError(f"position_ids batch size {position_ids.shape[0]} cannot be broadcast to hidden_states batch size {bsz}")
+            
+            # Ensure position_ids sequence length matches hidden_states
+            if position_ids.shape[1] != q_len:
+                if position_ids.shape[1] == 1 and q_len == 1:
+                    # Single token generation case - this is fine
+                    pass
+                else:
+                    raise ValueError(f"position_ids seq length {position_ids.shape[1]} != hidden_states seq length {q_len}")
+        
         rope = self._get_rope_slice(q_len, device, position_ids)
-        te_mask = self._hf_to_te_mask(attention_mask, hidden_states)
+        te_mask = self._hf_to_te_mask(attention_mask, hidden_states, past_key_value)
         fp8_ok = getattr(te.pytorch, "is_fp8_available", lambda: True)()
         fp8_enabled = fp8_ok and (self.training or _is_fp8_enabled_for_infer())
         attn_call_kwargs = dict(attention_mask=te_mask, rotary_pos_emb=rope, past_key_value=past_key_value, use_cache=use_cache, output_attentions=output_attentions)
