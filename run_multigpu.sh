@@ -91,7 +91,6 @@ launch_fsdp_training() {
         --num_epochs 3 \
         --learning_rate 5e-6 \
         --num_warmup_steps 200 \
-        --use_fsdp \
         --gradient_checkpointing \
         --output_dir "./checkpoints/${model_name##*/}-fp8-fsdp" \
         --log_interval 10 \

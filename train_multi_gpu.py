@@ -300,7 +300,7 @@ class ModelFactory:
         """Create Transformer Engine model"""
         if "llama" in config.model_name.lower():
             from te_llama import TELlamaForCausalLM
-            model = TELlamaForCausalLM.from_pretrained(
+            model = TELlamaForCausalLM.from_pretrained_local(
                 config.model_name,
                 config=model_config,
                 torch_dtype=torch.bfloat16,
@@ -308,7 +308,7 @@ class ModelFactory:
             )
         elif "qwen" in config.model_name.lower():
             from te_qwen import TEQwen3ForCausalLM
-            model = TEQwen3ForCausalLM.from_pretrained(
+            model = TEQwen3ForCausalLM.from_pretrained_local(
                 config.model_name,
                 config=model_config,
                 torch_dtype=torch.bfloat16,

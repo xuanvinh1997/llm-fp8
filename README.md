@@ -38,20 +38,17 @@ python train_fp8.py \
 ```
 
 ### Meta-Llama 3.2 3B
-
+3b
 ```bash
-python train_fp8.py \
-  --model_name meta-llama/Llama-3.2-3B \
-  --dataset_name nvidia/OpenMathInstruct-2 \
-  --batch_size 12 \
-  --mixed_precision fp8 \
-  --max_seq_length 1024 \
-  --split_name train_1M \
-  --use_te \
-  --use_wandb \
-  --wandb_project llm-fp8 \
-  --wandb_run_name llama32-3b-fp8
+export NVTE_FLASH_ATTN=1
+export NVTE_FUSED_ATTN=0
+python train_fp8.py   --model_name meta-llama/Llama-3.2-3B   --dataset_name nvidia/OpenMathInstruct-2   --batch_size 16   --mixed_precision fp8   --max_seq_length 512   --split_name train_1M   --use_te   --use_wandb   --wandb_project llm-fp8   --wandb_run_name llama32-3b-fp8
 ```
+8b
+```bash
+export NVTE_FLASH_ATTN=1
+export NVTE_FUSED_ATTN=0
+python train_fp8.py   --model_name meta-llama/Llama-3.1-8B   --dataset_name nvidia/OpenMathInstruct-2   --batch_size 12   --mixed_precision fp8   --max_seq_length 512   --split_name train_1M   --use_te   --use_wandb   --wandb_project llm-fp8   --wandb_run_name llama31-8b-fp8
 
 ### Meta-Llama 3.1 8B
 
@@ -148,9 +145,9 @@ Switch the precision flag to generate a BF16 benchmark run with W&B logging:
 python train_fp8.py \
   --model_name meta-llama/Llama-3.2-3B \
   --dataset_name nvidia/OpenMathInstruct-2 \
-  --batch_size 12 \
+  --batch_size 24 \
   --mixed_precision bf16 \
-  --max_seq_length 1024 \
+  --max_seq_length 512 \
   --split_name train_1M \
   --use_wandb \
   --wandb_project llm-fp8 \
