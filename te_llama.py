@@ -1,9 +1,6 @@
 # Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # See LICENSE for license information.
-# Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-#
-# See LICENSE for license information.
 
 import os
 import re
@@ -18,9 +15,7 @@ from transformer_engine.pytorch.attention import RotaryPositionEmbedding
 import transformers
 from transformers.models.llama.modeling_llama import (
     LlamaModel,
-    LlamaModel,
     LlamaForCausalLM,
-    LlamaRMSNorm,
     LlamaRMSNorm,
     LlamaConfig,
 )
@@ -28,13 +23,11 @@ from transformers.modeling_utils import _add_variant, load_state_dict
 from transformers.utils import WEIGHTS_INDEX_NAME
 from transformers.utils.hub import get_checkpoint_shard_files
 from transformer_engine.common.recipe import Format, DelayedScaling
-from transformer_engine.common.recipe import Format, DelayedScaling
 
 
 @contextmanager
 def replace_decoder(te_decoder_cls):
     """
-    Replace `LlamaDecoderLayer` with custom `TELlamaDecoderLayer`.
     Replace `LlamaDecoderLayer` with custom `TELlamaDecoderLayer`.
     """
     original_llama_decoder_cls = transformers.models.llama.modeling_llama.LlamaDecoderLayer
@@ -43,164 +36,54 @@ def replace_decoder(te_decoder_cls):
         yield
     finally:
         transformers.models.llama.modeling_llama.LlamaDecoderLayer = original_llama_decoder_cls
-
-
-# FP8 recipes: attention uses HYBRID, MLP uses E4M3 as you had
-# FP8 recipes: attention uses HYBRID, MLP uses E4M3 as you had
 attn_recipe = DelayedScaling(fp8_format=Format.HYBRID, amax_history_len=16, amax_compute_algo="max")
-mlp_recipe  = DelayedScaling(fp8_format=Format.E4M3,   amax_history_len=16, amax_compute_algo="max")
-mlp_recipe  = DelayedScaling(fp8_format=Format.E4M3,   amax_history_len=16, amax_compute_algo="max")
-
-
+mlp_recipe = DelayedScaling(fp8_format=Format.E4M3, amax_history_len=16, amax_compute_algo="max")
 class TELlamaDecoderLayer(torch.nn.Module):
     def __init__(self, config, *args, dropout_rate=0.0, **kwargs):
-    def __init__(self, config, *args, dropout_rate=0.0, **kwargs):
         super().__init__()
-        # TransformerEngine attention layer
+        te.pytorch.TransformerLayer
         self.self_attention = te.pytorch.MultiheadAttention(
-        # TransformerEngine attention layer
-        self.self_attention = te.pytorch.MultiheadAttention(
-            hidden_size=config.hidden_size,
+            hidden_size=config.hidden_size, 
             num_attention_heads=config.num_attention_heads,
             bias=False,
-            layernorm_epsilon=config.rms_norm_eps,
             layernorm_epsilon=config.rms_norm_eps,
             attention_dropout=dropout_rate,
             fuse_qkv_params=False,
             normalization="RMSNorm",
             num_gqa_groups=config.num_key_value_heads,
-            num_gqa_groups=config.num_key_value_heads,
             qkv_format="bshd",
-            input_layernorm=True,
+            input_layernorm=True
         )
 
-        # TransformerEngine MLP with RMSNorm + SwiGLU
         self.layernorm_mlp = te.pytorch.LayerNormMLP(
-        # TransformerEngine MLP with RMSNorm + SwiGLU
-        self.layernorm_mlp = te.pytorch.LayerNormMLP(
-            hidden_size=config.hidden_size,
+            hidden_size=config.hidden_size, 
             ffn_hidden_size=config.intermediate_size,
             normalization="RMSNorm",
             activation="swiglu",
         )
 
-        # Precompute TE rotary embedding table up to config.max_position_embeddings
         te_rope = RotaryPositionEmbedding(config.hidden_size // config.num_attention_heads)
-        # Note: we'll ensure device alignment at forward() in case module moved after init
         self.te_rope_emb = te_rope(max_seq_len=config.max_position_embeddings).cuda()
 
-    def forward(self, hidden_states, attention_mask=None, position_ids=None, past_key_value=None, 
-                output_attentions=False, use_cache=False, **kwargs):
-        """
-        Forward pass with proper input handling and HuggingFace compatibility.
-        """
-        # Handle input format - sometimes hidden_states comes as first element of tuple
-        if isinstance(hidden_states, (tuple, list)):
-            hidden_states = hidden_states[0]
-        
-        # Ensure we have a tensor
+    def forward(self, hidden_states, attention_mask=None, **kwargs):
+        # check type is fp8
         if not isinstance(hidden_states, torch.Tensor):
-            raise TypeError(f"Expected hidden_states to be torch.Tensor after extraction, got {type(hidden_states)}")
-        
-        # Handle attention mask format conversion
+            raise TypeError("hidden_states must be a torch.Tensor")
         if attention_mask is not None and not isinstance(attention_mask, torch.Tensor):
             raise TypeError("attention_mask must be a torch.Tensor")
-
-        # Make sure RoPE lives on the same device as hidden_states
-        if self.te_rope_emb.device != hidden_states.device:
-            self.te_rope_emb = self.te_rope_emb.to(hidden_states.device)
-
-        # Convert attention mask format for TransformerEngine
-        te_attention_mask = None
-        if attention_mask is not None:
-            te_attention_mask = self._convert_attention_mask(attention_mask, hidden_states)
-
-        # Store residual for skip connection
-        residual = hidden_states
-
-        # Self-attention with FP8 HYBRID format
+        # Define the FP8 recipes for attention and MLP
+        # print("dtype of hidden_states:", hidden_states.dtype)
         with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=attn_recipe):
-            try:
-                attn_output = self.self_attention(
-                    hidden_states,
-                    attention_mask=te_attention_mask,
-                    rotary_pos_emb=self.te_rope_emb,
-                )
-                # Handle case where TE returns tuple (output, attention_weights)
-                if isinstance(attn_output, (tuple, list)):
-                    attn_output = attn_output[0]
-            except Exception as e:
-                print(f"Attention forward failed: {e}")
-                # Fallback without attention mask
-                attn_output = self.self_attention(
-                    hidden_states,
-                    rotary_pos_emb=self.te_rope_emb,
-                )
-                if isinstance(attn_output, (tuple, list)):
-                    attn_output = attn_output[0]
-
-        # Apply residual connection
-        hidden_states = residual + attn_output
-
-        # Store residual for MLP skip connection
-        residual = hidden_states
-
-        # MLP with FP8 E4M3 format
+            attn_out = self.self_attention(hidden_states, attention_mask=attention_mask, rotary_pos_emb=self.te_rope_emb)
+        hidden_states = hidden_states + attn_out
         with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=mlp_recipe):
-            mlp_output = self.layernorm_mlp(hidden_states)
-
-        # Apply residual connection
-        hidden_states = residual + mlp_output
-
-        # Return in HuggingFace expected format
-        outputs = (hidden_states,)
-        
-        if output_attentions:
-            # TE doesn't easily provide attention weights, so we append None
-            outputs = outputs + (None,)
-        
-        if use_cache:
-            # TE doesn't easily provide past_key_value, so we append None
-            outputs = outputs + (None,)
-
-        return outputs
-
-    def _convert_attention_mask(self, attention_mask, hidden_states):
-        """Convert HuggingFace attention mask format to TransformerEngine format."""
-        batch_size, seq_len = attention_mask.shape[:2]
-        device = hidden_states.device
-        dtype = hidden_states.dtype
-
-        # Create causal mask (lower triangular)
-        causal_mask = torch.tril(torch.ones(seq_len, seq_len, device=device, dtype=torch.bool))
-        
-        # Expand to batch dimension: (seq_len, seq_len) -> (batch_size, 1, seq_len, seq_len)
-        causal_mask = causal_mask.unsqueeze(0).unsqueeze(0).expand(batch_size, 1, -1, -1)
-        
-        # Apply padding mask
-        # attention_mask shape: (batch_size, seq_len) -> (batch_size, 1, 1, seq_len)
-        padding_mask = attention_mask.unsqueeze(1).unsqueeze(1)
-        
-        # Combine causal and padding masks
-        combined_mask = causal_mask & padding_mask
-        
-        # Convert to float and apply masking
-        combined_mask = combined_mask.to(dtype)
-        # TE expects 0 for valid positions, -inf for masked positions
-        combined_mask = combined_mask.masked_fill(combined_mask == 0, float('-inf'))
-        combined_mask = combined_mask.masked_fill(combined_mask == 1, 0.0)
-        
-        return combined_mask
+            ffn_out = self.layernorm_mlp(hidden_states)
+        hidden_states = hidden_states + ffn_out
+        return hidden_states
 
 
 class TELlamaForCausalLM:
     """
-    Causal LM created with `LlamaModel`. The underlying `LlamaDecoderLayer`
-    class is monkey-patched with `TELlamaDecoderLayer` class before
-    initializing the causal LM with `LlamaForCausalLM`.
-
-    Args:
-        config: LlamaConfig
     Causal LM created with `LlamaModel`. The underlying `LlamaDecoderLayer`
     class is monkey-patched with `TELlamaDecoderLayer` class before
     initializing the causal LM with `LlamaForCausalLM`.
@@ -216,58 +99,62 @@ class TELlamaForCausalLM:
 
     @classmethod
     def from_pretrained_local(cls, pretrained_model_name_or_path, *args, config, **kwargs):
-    def from_pretrained_local(cls, pretrained_model_name_or_path, *args, config, **kwargs):
         """
         Custom method adapted from `from_pretrained` method in HuggingFace
-        Transformers:
-        https://github.com/huggingface/transformers/blob/f497f56/src/transformers/modeling_utils.py#L2579
+        Transformers repo: https://github.com/huggingface/transformers/blob/f497f564bb76697edab09184a252fc1b1a326d1e/src/transformers/modeling_utils.py#L2579
         """
-        # Set default dtype before loading weights (matches your training dtype)
-        torch.set_default_dtype(kwargs.get("torch_dtype", torch.bfloat16))
+        # Before loading the model, set the default dtype for torch
+        torch.set_default_dtype(kwargs["torch_dtype"])
 
-        # Instantiate the TE-patched model
+        # Load the vanilla model weights
         vanilla_model = cls(config)
         subfolder = ""
         variant = None
-
-        # Determine checkpoint layout
         if os.path.isfile(
-            os.path.join(pretrained_model_name_or_path, subfolder, _add_variant("model.safetensors.index.json", variant))
+            os.path.join(
+                pretrained_model_name_or_path,
+                subfolder,
+                _add_variant("model.safetensors.index.json", variant),
+            )
         ):
-            archive_file = os.path.join(pretrained_model_name_or_path, subfolder, _add_variant("model.safetensors.index.json", variant))
+            # Load from a sharded PyTorch checkpoint
+            archive_file = os.path.join(
+                pretrained_model_name_or_path,
+                subfolder,
+                _add_variant("model.safetensors.index.json", variant),
+            )
             is_sharded = True
         elif os.path.isfile(
-            os.path.join(pretrained_model_name_or_path, subfolder, _add_variant(WEIGHTS_INDEX_NAME, variant))
+            os.path.join(
+                pretrained_model_name_or_path, subfolder, _add_variant(WEIGHTS_INDEX_NAME, variant)
+            )
         ):
-            archive_file = os.path.join(pretrained_model_name_or_path, subfolder, _add_variant(WEIGHTS_INDEX_NAME, variant))
+            # Load from a sharded PyTorch checkpoint
+            archive_file = os.path.join(
+                pretrained_model_name_or_path, subfolder, _add_variant(WEIGHTS_INDEX_NAME, variant)
+            )
             is_sharded = True
+        # check model.safetensors file
         elif os.path.isfile(
-            os.path.join(pretrained_model_name_or_path, subfolder, _add_variant("model.safetensors", variant))
+            os.path.join(
+                pretrained_model_name_or_path,
+                subfolder,
+                _add_variant("model.safetensors", variant),
+            )
         ):
-            archive_file = os.path.join(pretrained_model_name_or_path, subfolder, _add_variant("model.safetensors", variant))
+            # Load from a non-sharded PyTorch checkpoint
+            archive_file = os.path.join(
+                pretrained_model_name_or_path,
+                subfolder,
+                _add_variant("model.safetensors", variant),
+            )
             is_sharded = False
         else:
-            raise AssertionError("Only sharded or single-file .safetensors PyTorch checkpoints are supported.")
-        # Determine checkpoint layout
-        if os.path.isfile(
-            os.path.join(pretrained_model_name_or_path, subfolder, _add_variant("model.safetensors.index.json", variant))
-        ):
-            archive_file = os.path.join(pretrained_model_name_or_path, subfolder, _add_variant("model.safetensors.index.json", variant))
-            is_sharded = True
-        elif os.path.isfile(
-            os.path.join(pretrained_model_name_or_path, subfolder, _add_variant(WEIGHTS_INDEX_NAME, variant))
-        ):
-            archive_file = os.path.join(pretrained_model_name_or_path, subfolder, _add_variant(WEIGHTS_INDEX_NAME, variant))
-            is_sharded = True
-        elif os.path.isfile(
-            os.path.join(pretrained_model_name_or_path, subfolder, _add_variant("model.safetensors", variant))
-        ):
-            archive_file = os.path.join(pretrained_model_name_or_path, subfolder, _add_variant("model.safetensors", variant))
-            is_sharded = False
-        else:
-            raise AssertionError("Only sharded or single-file .safetensors PyTorch checkpoints are supported.")
+            raise AssertionError("Only sharded PyTorch ckpt format supported at the moment")
 
-        # Resolve shard files
+        
+
+        # If the checkpoint is not sharded, it's a trivial sharding case
         if not is_sharded:
             resolved_archive_file = [archive_file]
             print(f"Resolved archive file: {archive_file}")
@@ -276,136 +163,77 @@ class TELlamaForCausalLM:
                 pretrained_model_name_or_path,
                 archive_file,
             )
-        # Resolve shard files
-        if not is_sharded:
-            resolved_archive_file = [archive_file]
-            print(f"Resolved archive file: {archive_file}")
-        else:
-            resolved_archive_file, _ = get_checkpoint_shard_files(
-                pretrained_model_name_or_path,
-                archive_file,
-            )
 
-        # Load and map weights into TE modules
         for shard_file in resolved_archive_file:
             state_dict = load_state_dict(shard_file)
-            # Copy TE-specific parameters
+            # replace_params copies parameters relevant only to TransformerEngine
             replace_params(state_dict, vanilla_model.state_dict(), config)
-            # Load remaining params with strict=False (HF-style)
-            vanilla_model.load_state_dict(state_dict, strict=False)
-        # Load and map weights into TE modules
-        for shard_file in resolved_archive_file:
-            state_dict = load_state_dict(shard_file)
-            # Copy TE-specific parameters
-            replace_params(state_dict, vanilla_model.state_dict(), config)
-            # Load remaining params with strict=False (HF-style)
+            # load_state_dict copies parameters other than those in TransformerEngine
             vanilla_model.load_state_dict(state_dict, strict=False)
 
-            # Free memory
-            del state_dict
-            gc.collect()
-            # Free memory
+            # Force mem release. Taken from huggingface code
             del state_dict
             gc.collect()
 
         return vanilla_model
 
-        return vanilla_model
-
 
 def replace_params(hf_state_dict, te_state_dict, config):
-def replace_params(hf_state_dict, te_state_dict, config):
-    """
-    Copy selected HF weights into TransformerEngine layer parameter slots.
-    Copy selected HF weights into TransformerEngine layer parameter slots.
-    """
-    # collect all layer prefixes to update
     # collect all layer prefixes to update
     all_layer_prefixes = set()
     for param_key in hf_state_dict.keys():
-        layer_prefix_pat = r"model\.layers\.\d+\."
-        m = re.match(layer_prefix_pat, param_key)
-        layer_prefix_pat = r"model\.layers\.\d+\."
+        layer_prefix_pat = "model.layers.\d+."
         m = re.match(layer_prefix_pat, param_key)
         if m is not None:
             all_layer_prefixes.add(m.group())
-
+    # print(te_state_dict.keys())
     for layer_prefix in all_layer_prefixes:
-        # skip if HF layer missing
+        # When loading weights into models with less number of layers, skip the
+        # copy if the corresponding layer doesn't exist in HF model
         if layer_prefix + "input_layernorm.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.layer_norm_weight"].data[:] = \
-                hf_state_dict[layer_prefix + "input_layernorm.weight"].data[:]
+            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.layer_norm_weight"].data[
+                :
+            ] = hf_state_dict[layer_prefix + "input_layernorm.weight"].data[:]
 
         if layer_prefix + "self_attn.q_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.query_weight"].data[:] = \
+            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.query_weight"].data[:] = (
                 hf_state_dict[layer_prefix + "self_attn.q_proj.weight"].data[:]
+            )
 
         if layer_prefix + "self_attn.k_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.key_weight"].data[:] = \
+            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.key_weight"].data[:] = (
                 hf_state_dict[layer_prefix + "self_attn.k_proj.weight"].data[:]
+            )
 
         if layer_prefix + "self_attn.v_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.value_weight"].data[:] = \
+            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.value_weight"].data[:] = (
                 hf_state_dict[layer_prefix + "self_attn.v_proj.weight"].data[:]
+            )
 
         if layer_prefix + "self_attn.o_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "self_attention.proj.weight"].data[:] = \
-                hf_state_dict[layer_prefix + "self_attn.o_proj.weight"].data[:]
+            te_state_dict[layer_prefix + "self_attention.proj.weight"].data[:] = hf_state_dict[
+                layer_prefix + "self_attn.o_proj.weight"
+            ].data[:]
 
         if layer_prefix + "post_attention_layernorm.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "layernorm_mlp.layer_norm_weight"].data[:] = \
-                hf_state_dict[layer_prefix + "post_attention_layernorm.weight"].data[:]
+            te_state_dict[layer_prefix + "layernorm_mlp.layer_norm_weight"].data[:] = hf_state_dict[
+                layer_prefix + "post_attention_layernorm.weight"
+            ].data[:]
 
-        # MLP: gate+up concat to fc1, down -> fc2
+        # It may happen that gate_proj.weight and up_proj.weight will be in the different files, so we need to
+        # load them separately.
         if layer_prefix + "mlp.gate_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "layernorm_mlp.fc1_weight"].data[: config.intermediate_size] = \
-                hf_state_dict[layer_prefix + "mlp.gate_proj.weight"].data
+            te_state_dict[layer_prefix + "layernorm_mlp.fc1_weight"].data[
+                : config.intermediate_size
+            ] = hf_state_dict[layer_prefix + "mlp.gate_proj.weight"].data
 
         if layer_prefix + "mlp.up_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "layernorm_mlp.fc1_weight"].data[config.intermediate_size :] = \
-                hf_state_dict[layer_prefix + "mlp.up_proj.weight"].data
+            te_state_dict[layer_prefix + "layernorm_mlp.fc1_weight"].data[
+                config.intermediate_size :
+            ] = hf_state_dict[layer_prefix + "mlp.up_proj.weight"].data
 
         if layer_prefix + "mlp.down_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "layernorm_mlp.fc2_weight"].data[:] = \
-                hf_state_dict[layer_prefix + "mlp.down_proj.weight"].data[:]
-
-    return all_layer_prefixes
-        # skip if HF layer missing
-        if layer_prefix + "input_layernorm.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.layer_norm_weight"].data[:] = \
-                hf_state_dict[layer_prefix + "input_layernorm.weight"].data[:]
-
-        if layer_prefix + "self_attn.q_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.query_weight"].data[:] = \
-                hf_state_dict[layer_prefix + "self_attn.q_proj.weight"].data[:]
-
-        if layer_prefix + "self_attn.k_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.key_weight"].data[:] = \
-                hf_state_dict[layer_prefix + "self_attn.k_proj.weight"].data[:]
-
-        if layer_prefix + "self_attn.v_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.value_weight"].data[:] = \
-                hf_state_dict[layer_prefix + "self_attn.v_proj.weight"].data[:]
-
-        if layer_prefix + "self_attn.o_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "self_attention.proj.weight"].data[:] = \
-                hf_state_dict[layer_prefix + "self_attn.o_proj.weight"].data[:]
-
-        if layer_prefix + "post_attention_layernorm.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "layernorm_mlp.layer_norm_weight"].data[:] = \
-                hf_state_dict[layer_prefix + "post_attention_layernorm.weight"].data[:]
-
-        # MLP: gate+up concat to fc1, down -> fc2
-        if layer_prefix + "mlp.gate_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "layernorm_mlp.fc1_weight"].data[: config.intermediate_size] = \
-                hf_state_dict[layer_prefix + "mlp.gate_proj.weight"].data
-
-        if layer_prefix + "mlp.up_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "layernorm_mlp.fc1_weight"].data[config.intermediate_size :] = \
-                hf_state_dict[layer_prefix + "mlp.up_proj.weight"].data
-
-        if layer_prefix + "mlp.down_proj.weight" in hf_state_dict:
-            te_state_dict[layer_prefix + "layernorm_mlp.fc2_weight"].data[:] = \
-                hf_state_dict[layer_prefix + "mlp.down_proj.weight"].data[:]
-
+            te_state_dict[layer_prefix + "layernorm_mlp.fc2_weight"].data[:] = hf_state_dict[
+                layer_prefix + "mlp.down_proj.weight"
+            ].data[:]
     return all_layer_prefixes

@@ -61,7 +61,6 @@ launch_ddp_training() {
         --num_warmup_steps 100 \
         --output_dir "./checkpoints/${model_name##*/}-fp8" \
         --log_interval 10 \
-        --save_interval 1 \
         --use_wandb \
         --wandb_project llm-fp8-multi \
         --wandb_run_name "${model_name##*/}-fp8-${NUM_GPUS}gpu" \
@@ -96,7 +95,6 @@ launch_fsdp_training() {
         --gradient_checkpointing \
         --output_dir "./checkpoints/${model_name##*/}-fp8-fsdp" \
         --log_interval 10 \
-        --save_interval 1 \
         --use_wandb \
         --wandb_project llm-fp8-multi \
         --wandb_run_name "${model_name##*/}-fp8-fsdp-${NUM_GPUS}gpu" \

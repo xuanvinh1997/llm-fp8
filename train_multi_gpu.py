@@ -887,12 +887,6 @@ class AdvancedTrainer:
                 # Memory optimization
                 if self.global_step % self.config.empty_cache_freq == 0:
                     self.memory_profiler.optimize_memory()
-                
-                # Checkpointing
-                if self.global_step % self.config.save_interval == 0:
-                    self.save_checkpoint(
-                        optimizer, scheduler, epoch, self.global_step
-                    )
             
             # Update progress bar
             if self.rank == 0:
@@ -993,14 +987,23 @@ class AdvancedTrainer:
         step: int,
         is_best: bool = False
     ):
-        """Save checkpoint with FSDP support"""
+        """Save checkpoint with FSDP support - keeps only best checkpoint"""
         
         if self.rank != 0:
             return
         
+        # Only save if it's the best model or final checkpoint
+        if not is_best and not (optimizer is None and scheduler is None):
+            return
+        
         # Create checkpoint directory
-        suffix = "best" if is_best else f"epoch{epoch}_step{step}"
+        suffix = "best" if is_best else "final"
         save_dir = Path(self.config.output_dir) / f"checkpoint_{suffix}"
+        
+        # Clean up old checkpoints if saving new best
+        if is_best:
+            self._cleanup_old_checkpoints()
+        
         save_dir.mkdir(parents=True, exist_ok=True)
         
         # Get model to save
@@ -1041,6 +1044,22 @@ class AdvancedTrainer:
             json.dump(asdict(self.config), f, indent=2)
         
         print(f"Checkpoint saved to {save_dir}")
+    
+    def _cleanup_old_checkpoints(self):
+        """Clean up old checkpoint directories"""
+        output_dir = Path(self.config.output_dir)
+        if not output_dir.exists():
+            return
+        
+        # Remove all checkpoint directories except the one we're about to create
+        for checkpoint_dir in output_dir.glob("checkpoint_*"):
+            if checkpoint_dir.is_dir():
+                try:
+                    import shutil
+                    shutil.rmtree(checkpoint_dir)
+                    print(f"Removed old checkpoint: {checkpoint_dir}")
+                except Exception as e:
+                    print(f"Warning: Could not remove {checkpoint_dir}: {e}")
 
 
 # ============================================================================

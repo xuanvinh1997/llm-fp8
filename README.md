@@ -175,5 +175,5 @@ python train_fp8.py \
 
 ## Multi-GPU Training with Deepspeed
 ```bash
-torchrun --nproc_per_node=2         train_multi_gpu.py         --model_name meta-llama/Llama-3.2-3B         --dataset_name nvidia/OpenMathInstruct-2         --batch_size 1         --sharding_mode fsdp_full         --mixed_precision fp8         --use_te         --gradient_checkpointing         --max_seq_length 512         --learning_rate 1e-5         --gradient_accumulation_steps 4         --empty_cache_freq 25
+torchrun --nproc_per_node=4         train_multi_gpu.py         --model_name meta-llama/Llama-3.2-3B         --dataset_name nvidia/OpenMathInstruct-2   --split_name train_1M         --batch_size 1         --sharding_mode fsdp_full         --mixed_precision fp8         --use_te         --gradient_checkpointing         --max_seq_length 512         --learning_rate 1e-5         --gradient_accumulation_steps 4         --empty_cache_freq 25
 ```
