@@ -79,7 +79,7 @@ class ShardingMode(Enum):
 # ============================================================================
 
 @dataclass
-class AdvancedDistributedConfig(TrainingConfig):
+class DistributedConfig(TrainingConfig):
     """Advanced configuration for distributed training"""
     
     # Sharding strategy
@@ -136,32 +136,14 @@ class AdvancedDistributedConfig(TrainingConfig):
             self.sharding_mode = self._auto_detect_sharding()
     
     def _auto_detect_sharding(self) -> str:
-        """Auto-detect best sharding strategy based on model"""
-        model_size_map = {
-            "1B": 1, "3B": 3, "7B": 7, "8B": 8,
-            "13B": 13, "14B": 14, "30B": 30, "70B": 70, "175B": 175
-        }
-        
-        # Extract model size
-        model_size = 0
-        for size_str, size_val in model_size_map.items():
-            if size_str in self.model_name:
-                model_size = size_val
-                break
-        
-        # Determine strategy based on size
+        """Simple sharding strategy selection"""
         num_gpus = torch.cuda.device_count()
-        
-        if model_size == 0:
-            return ShardingMode.DDP.value
-        elif model_size <= 3:
-            return ShardingMode.DDP.value
-        elif model_size <= 8:
-            return ShardingMode.FSDP_GRAD.value if num_gpus < 4 else ShardingMode.DDP.value
-        elif model_size <= 30:
+
+        # Simple rule: use FSDP for multiple GPUs, DDP for single GPU
+        if num_gpus > 1:
             return ShardingMode.FSDP_FULL.value
         else:
-            return ShardingMode.FSDP_OFFLOAD.value
+            return ShardingMode.DDP.value
 
 
 # ============================================================================
@@ -262,176 +244,94 @@ class MemoryProfiler:
 # Advanced Model Factory
 # ============================================================================
 
-class AdvancedModelFactory:
+class ModelFactory:
     """Factory for creating models with various optimizations"""
     
     @staticmethod
     def create_model(
-        config: AdvancedDistributedConfig,
+        config: DistributedConfig,
         rank: int,
         world_size: int
     ) -> torch.nn.Module:
-        """Create model with all optimizations"""
-        
-        # Download model on rank 0
-        cache_dir = AdvancedModelFactory._ensure_model_cached(config, rank)
-        
-        # Sync across ranks
-        if dist.is_initialized():
-            dist.barrier()
-        
-        # Load model configuration
-        model_config = AutoConfig.from_pretrained(cache_dir)
-        
-        # Apply optimizations to config
-        model_config = AdvancedModelFactory._optimize_model_config(
-            model_config, config
+        """Create model with simplified loading"""
+
+        # Simple model loading - let HuggingFace handle caching
+        model_config = AutoConfig.from_pretrained(
+            config.model_name,
+            cache_dir=config.weights_cache_dir
         )
-        
-        # Create model
-        if config.use_te:
-            model = AdvancedModelFactory._create_te_model(
-                config, cache_dir, model_config
-            )
+
+        # Set basic configuration
+        model_config.use_cache = False
+        if config.mixed_precision == "bf16":
+            model_config.torch_dtype = torch.bfloat16
+        elif config.mixed_precision == "fp16":
+            model_config.torch_dtype = torch.float16
         else:
-            model = AdvancedModelFactory._create_hf_model(
-                cache_dir, model_config, config
+            model_config.torch_dtype = torch.float32
+
+        # Enable Flash Attention if available
+        if hasattr(model_config, "_attn_implementation"):
+            model_config._attn_implementation = "flash_attention_2"
+
+        # Create model based on type
+        if config.use_te:
+            model = ModelFactory._create_te_model(config, model_config)
+        else:
+            model = AutoModelForCausalLM.from_pretrained(
+                config.model_name,
+                config=model_config,
+                torch_dtype=model_config.torch_dtype,
+                low_cpu_mem_usage=True,
+                cache_dir=config.weights_cache_dir
             )
-        
-        # Apply post-creation optimizations
-        model = AdvancedModelFactory._apply_optimizations(model, config)
-        
+
+        # Apply optimizations
+        if config.gradient_checkpointing and hasattr(model, "gradient_checkpointing_enable"):
+            model.gradient_checkpointing_enable()
+
+        if config.compile_model and hasattr(torch, "compile"):
+            model = torch.compile(model, mode="max-autotune")
+
         return model
     
     @staticmethod
-    def _ensure_model_cached(
-        config: AdvancedDistributedConfig,
-        rank: int
-    ) -> str:
-        """Ensure model is downloaded and cached"""
-        if rank == 0:
-            from huggingface_hub import snapshot_download
-            cache_dir = snapshot_download(
-                repo_id=config.model_name,
-                cache_dir=config.weights_cache_dir or "./model_cache",
-                max_workers=8,
-            )
-            print(f"Model cached at: {cache_dir}")
-        else:
-            # Construct cache path for other ranks
-            cache_base = Path(config.weights_cache_dir or "./model_cache")
-            model_id = config.model_name.replace("/", "--")
-            cache_pattern = cache_base / f"models--{model_id}" / "snapshots" / "*"
-            
-            # Wait for rank 0 to download
-            time.sleep(1)
-            
-            # Find the cache directory
-            cache_dirs = list(cache_pattern.parent.glob("*"))
-            if cache_dirs:
-                cache_dir = str(cache_dirs[0])
-            else:
-                cache_dir = None
-        
-        return cache_dir
-    
-    @staticmethod
-    def _optimize_model_config(
-        model_config,
-        config: AdvancedDistributedConfig
-    ):
-        """Apply optimizations to model configuration"""
-        
-        # Use Flash Attention 2 if available
-        if hasattr(model_config, "_attn_implementation"):
-            model_config._attn_implementation = "flash_attention_2"
-        
-        # Disable caching during training
-        model_config.use_cache = False
-        
-        # Set proper dtype
-        if config.mixed_precision == "fp8":
-            model_config.torch_dtype = torch.bfloat16  # Base dtype, FP8 in TE layers
-        elif config.mixed_precision == "bf16":
-            model_config.torch_dtype = torch.bfloat16
-        else:
-            model_config.torch_dtype = torch.float32
-        
-        return model_config
-    
-    @staticmethod
-    def _create_te_model(
-        config: AdvancedDistributedConfig,
-        cache_dir: str,
-        model_config
-    ):
+    def _create_te_model(config: DistributedConfig, model_config):
         """Create Transformer Engine model"""
         if "llama" in config.model_name.lower():
             from te_llama import TELlamaForCausalLM
-            model = TELlamaForCausalLM.from_pretrained_local(
-                cache_dir,
+            model = TELlamaForCausalLM.from_pretrained(
+                config.model_name,
                 config=model_config,
-                torch_dtype=torch.bfloat16
+                torch_dtype=torch.bfloat16,
+                cache_dir=config.weights_cache_dir
             )
         elif "qwen" in config.model_name.lower():
             from te_qwen import TEQwen3ForCausalLM
-            model = TEQwen3ForCausalLM.from_pretrained_local(
-                cache_dir,
+            model = TEQwen3ForCausalLM.from_pretrained(
+                config.model_name,
                 config=model_config,
-                torch_dtype=torch.bfloat16
+                torch_dtype=torch.bfloat16,
+                cache_dir=config.weights_cache_dir
             )
         else:
             raise ValueError(f"TE not supported for {config.model_name}")
-        
+
         return model
     
-    @staticmethod
-    def _create_hf_model(
-        cache_dir: str,
-        model_config,
-        config: AdvancedDistributedConfig
-    ):
-        """Create HuggingFace model"""
-        model = AutoModelForCausalLM.from_pretrained(
-            cache_dir,
-            config=model_config,
-            torch_dtype=model_config.torch_dtype,
-            low_cpu_mem_usage=True,
-        )
-        return model
-    
-    @staticmethod
-    def _apply_optimizations(
-        model: torch.nn.Module,
-        config: AdvancedDistributedConfig
-    ) -> torch.nn.Module:
-        """Apply post-creation optimizations"""
-        
-        # Gradient checkpointing
-        if config.gradient_checkpointing:
-            if hasattr(model, "gradient_checkpointing_enable"):
-                model.gradient_checkpointing_enable()
-            else:
-                print("Warning: Gradient checkpointing not supported")
-        
-        # Compile model (PyTorch 2.0+)
-        if config.compile_model and hasattr(torch, "compile"):
-            model = torch.compile(model, mode="max-autotune")
-        
-        return model
 
 
 # ============================================================================
 # Advanced Distributed Wrapper
 # ============================================================================
 
-class AdvancedDistributedWrapper:
+class DistributedWrapper:
     """Advanced distributed model wrapping with multiple strategies"""
     
     @staticmethod
     def wrap_model(
         model: torch.nn.Module,
-        config: AdvancedDistributedConfig,
+        config: DistributedConfig,
         rank: int,
         world_size: int,
         device: torch.device
@@ -441,11 +341,11 @@ class AdvancedDistributedWrapper:
         sharding_mode = ShardingMode(config.sharding_mode)
         
         if sharding_mode == ShardingMode.DDP:
-            return AdvancedDistributedWrapper._wrap_ddp(
+            return DistributedWrapper._wrap_ddp(
                 model, config, rank, device
             )
         elif sharding_mode in [ShardingMode.FSDP_GRAD, ShardingMode.FSDP_FULL, ShardingMode.FSDP_OFFLOAD]:
-            return AdvancedDistributedWrapper._wrap_fsdp(
+            return DistributedWrapper._wrap_fsdp(
                 model, config, rank, world_size, device, sharding_mode
             )
         else:
@@ -454,7 +354,7 @@ class AdvancedDistributedWrapper:
     @staticmethod
     def _wrap_ddp(
         model: torch.nn.Module,
-        config: AdvancedDistributedConfig,
+        config: DistributedConfig,
         rank: int,
         device: torch.device
     ) -> DDP:
@@ -480,7 +380,7 @@ class AdvancedDistributedWrapper:
     @staticmethod
     def _wrap_fsdp(
         model: torch.nn.Module,
-        config: AdvancedDistributedConfig,
+        config: DistributedConfig,
         rank: int,
         world_size: int,
         device: torch.device,
@@ -506,7 +406,7 @@ class AdvancedDistributedWrapper:
             )
         
         # Auto wrap policy
-        auto_wrap_policy = AdvancedDistributedWrapper._get_auto_wrap_policy(
+        auto_wrap_policy = DistributedWrapper._get_auto_wrap_policy(
             model, config
         )
         
@@ -562,7 +462,7 @@ class AdvancedDistributedWrapper:
     @staticmethod
     def _get_auto_wrap_policy(
         model: torch.nn.Module,
-        config: AdvancedDistributedConfig
+        config: DistributedConfig
     ):
         """Get appropriate auto-wrap policy for FSDP"""
         
@@ -614,12 +514,12 @@ class AdvancedDistributedWrapper:
 # Advanced Trainer
 # ============================================================================
 
-class AdvancedTrainer:
+class Trainer:
     """Advanced distributed trainer with comprehensive features"""
     
     def __init__(
         self,
-        config: AdvancedDistributedConfig,
+        config: DistributedConfig,
         model: torch.nn.Module,
         rank: int,
         world_size: int,
@@ -1066,7 +966,7 @@ class AdvancedTrainer:
 # Main Training Pipeline
 # ============================================================================
 
-def setup_distributed(config: AdvancedDistributedConfig) -> Tuple[int, int, int, torch.device]:
+def setup_distributed(config: DistributedConfig) -> Tuple[int, int, int, torch.device]:
     """Initialize distributed training environment"""
     
     if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
@@ -1106,7 +1006,7 @@ def setup_distributed(config: AdvancedDistributedConfig) -> Tuple[int, int, int,
     return rank, world_size, local_rank, device
 
 
-def main(config: AdvancedDistributedConfig):
+def main(config: DistributedConfig):
     """Main training pipeline"""
     
     # Setup distributed environment
@@ -1179,18 +1079,18 @@ def main(config: AdvancedDistributedConfig):
     if rank == 0:
         print("\n[Step 1/5] Creating model...")
     
-    model = AdvancedModelFactory.create_model(config, rank, world_size)
+    model = ModelFactory.create_model(config, rank, world_size)
     
     # Wrap model with distributed strategy
     if rank == 0:
         print("[Step 2/5] Applying distributed strategy...")
     
-    model = AdvancedDistributedWrapper.wrap_model(
+    model = DistributedWrapper.wrap_model(
         model, config, rank, world_size, device
     )
     
     # Create trainer
-    trainer = AdvancedTrainer(config, model, rank, world_size, device)
+    trainer = Trainer(config, model, rank, world_size, device)
     
     # Create optimizer and scheduler
     if rank == 0:
@@ -1364,7 +1264,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # Create config
-    config = AdvancedDistributedConfig(
+    config = DistributedConfig(
         # Model and data
         model_name=args.model_name,
         dataset_name=args.dataset_name,
