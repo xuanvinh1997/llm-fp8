@@ -96,7 +96,11 @@ class ModelManager:
     
     def _create_te_model(self, cache_dir: str, config) -> torch.nn.Module:
         """Create model with Transformer Engine."""
-        from te_llama import TELlamaForCausalLM
+        if self.config.fp8_scenario == "mxfp8":
+            from te_llama_mxfp8 import TELlamaForCausalLM
+        else:
+            from te_llama import TELlamaForCausalLM
+
         return TELlamaForCausalLM.from_pretrained_local(
             cache_dir,
             config=config,
@@ -113,71 +117,44 @@ class ModelManager:
 
 class FP8Handler:
     """Handles FP8 configuration and recipe creation."""
-    
+
     @staticmethod
     def create_fp8_kwargs(config: TrainingConfig) -> Optional[list]:
         """Create FP8 kwargs handlers based on configuration."""
         if config.mixed_precision != "fp8":
             return None
-        
+
         # Import TERecipeKwargs (the new name) or fall back to FP8RecipeKwargs
         try:
             from accelerate.utils.dataclasses import TERecipeKwargs
         except ImportError:
             from accelerate.utils.dataclasses import FP8RecipeKwargs as TERecipeKwargs
-        
+
         if config.fp8_scenario == "default":
             # Use default FP8 settings
             return [TERecipeKwargs()]
-        
+
         elif config.fp8_scenario == "mxfp8":
             return FP8Handler._create_mxfp8_kwargs(TERecipeKwargs)
-        
+
         else:
             raise ValueError(f"Unsupported FP8 scenario: {config.fp8_scenario}")
-    
+
     @staticmethod
     def _create_mxfp8_kwargs(TERecipeKwargs):
         """Create MXFP8 specific kwargs."""
-        # Check if MXFP8BlockScaling is available (TE v2.0+)
-        try:
-            from transformer_engine.common.recipe import MXFP8BlockScaling
-            
-            # MXFP8 is available, but we need to configure TERecipeKwargs
-            # to use MXFP8 through the parameters, not by passing a recipe object
-            print("MXFP8BlockScaling found in Transformer Engine")
-            
-            # For MXFP8, we should use E4M3 format everywhere
-            # The MXFP8 will be enabled at the Transformer Engine level
-            # when it detects Blackwell GPU and appropriate settings
-            return [TERecipeKwargs(
-                fp8_format="E4M3",  # Use E4M3 for MXFP8
-                amax_history_len=16,  # Shorter history for MXFP8
-                amax_compute_algo="max",
-                margin=0,
-                interval=1,
-                # Note: MXFP8 activation happens automatically on Blackwell GPUs
-                # when using E4M3 format with appropriate TE version
-            )]
-            
-        except ImportError:
-            # MXFP8BlockScaling not available, fall back to standard FP8
-            import warnings
-            warnings.warn(
-                "MXFP8BlockScaling is not available in your Transformer Engine version. "
-                "Please upgrade to transformer_engine>=2.0 for MXFP8 support. "
-                "Falling back to standard FP8 with HYBRID format.",
-                stacklevel=2,
-            )
-            
-            # Fall back to standard FP8 with HYBRID format
-            return [TERecipeKwargs(
-                fp8_format="HYBRID",  # E4M3 forward, E5M2 backward
-                amax_history_len=1024,
-                amax_compute_algo="max",
-                margin=0,
-                interval=1,
-            )]
+        # MXFP8 configuration is handled directly in te_llama_mxfp8.py
+        # We just need to return appropriate accelerate kwargs
+        print("Using MXFP8 configuration (handled in te_llama_mxfp8.py)")
+
+        # Return TERecipeKwargs with E4M3 format for MXFP8
+        return [TERecipeKwargs(
+            fp8_format="E4M3",  # Use E4M3 for MXFP8
+            amax_history_len=16,  # Shorter history for MXFP8
+            amax_compute_algo="max",
+            margin=0,
+            interval=1,
+        )]
 
 
 class Trainer:
@@ -190,12 +167,15 @@ class Trainer:
     def setup_training(self, model: torch.nn.Module) -> Tuple:
         """Set up accelerator, optimizers, and dataloaders."""
         # Create FP8 kwargs if needed
-        fp8_kwargs = FP8Handler.create_fp8_kwargs(self.config)
-        
+        fp8_kwargs = None
+        if self.config.mixed_precision == "fp8" and self.config.use_te:
+            # Only use FP8 kwargs with Accelerate when using TE models
+            fp8_kwargs = FP8Handler.create_fp8_kwargs(self.config)
+
         # Initialize accelerator
         accelerator = Accelerator(
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
-            mixed_precision=self.config.mixed_precision,
+            mixed_precision=self.config.mixed_precision if not self.config.use_te else "bf16",
             kwargs_handlers=fp8_kwargs,
         )
         
