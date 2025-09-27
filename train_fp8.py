@@ -279,49 +279,73 @@ class Trainer:
         
         return step_count
     
-    def _evaluate(self, model, accelerator, eval_loader, writer, wandb_run, 
+    def _evaluate(self, model, accelerator, eval_loader, writer, wandb_run,
                  epoch, step_count):
-        """Run evaluation."""
+        """Run evaluation with perplexity and other metrics."""
         model.eval()
         eval_loss = 0.0
-        
+        total_tokens = 0
+
         with torch.no_grad():
             for batch in eval_loader:
                 outputs = model(**batch)
-                eval_loss += outputs.loss.detach().float()
-        
+                loss = outputs.loss.detach().float()
+                eval_loss += loss
+
+                # Count tokens for accurate perplexity calculation
+                # Exclude padding tokens if they exist
+                if 'attention_mask' in batch:
+                    total_tokens += batch['attention_mask'].sum().item()
+                else:
+                    total_tokens += batch['input_ids'].numel()
+
+        # Calculate metrics
         avg_eval_loss = eval_loss / len(eval_loader)
-        
+        perplexity = torch.exp(avg_eval_loss).item()
+
         # Log evaluation metrics
         writer.add_scalar("Eval/Loss", avg_eval_loss, epoch)
+        writer.add_scalar("Eval/Perplexity", perplexity, epoch)
+        writer.add_scalar("Eval/Tokens", total_tokens, epoch)
+
         if wandb_run is not None:
-            wandb_run.log({"Eval/Loss": avg_eval_loss}, step=step_count)
-        
-        accelerator.print(f"Eval loss: {avg_eval_loss:.4f}")
+            wandb_run.log({
+                "Eval/Loss": avg_eval_loss,
+                "Eval/Perplexity": perplexity,
+                "Eval/Tokens": total_tokens
+            }, step=step_count)
+
+        accelerator.print(
+            f"Eval metrics - Loss: {avg_eval_loss:.4f}, "
+            f"Perplexity: {perplexity:.2f}, Tokens: {total_tokens}"
+        )
         model.train()
     
     def _log_training_metrics(self, loss, step_duration, step_count, total_steps,
                              writer, wandb_run, accelerator):
         """Log training metrics."""
         mem_mb = self.gpu_monitor.get_memory_usage()[0]
-        
+        train_perplexity = torch.exp(torch.tensor(loss)).item()
+
         # TensorBoard logging
         writer.add_scalar("Train/Loss", loss, step_count)
+        writer.add_scalar("Train/Perplexity", train_perplexity, step_count)
         writer.add_scalar("Train/StepTime_s", step_duration, step_count)
         writer.add_scalar("Train/GPU_Memory_MB", mem_mb, step_count)
-        
+
         # Weights & Biases logging
         if wandb_run is not None:
             wandb_run.log({
                 "Train/Loss": loss,
+                "Train/Perplexity": train_perplexity,
                 "Train/StepTime_s": step_duration,
                 "Train/GPU_Memory_MB": mem_mb,
                 "Train/Progress": step_count / total_steps,
             }, step=step_count)
-        
+
         # Console logging
         accelerator.print(
-            f"Step {step_count}: loss={loss:.4f}, "
+            f"Step {step_count}: loss={loss:.4f}, ppl={train_perplexity:.2f}, "
             f"step_time={step_duration:.2f}s, gpu_mem={mem_mb:.0f}MB"
         )
     
