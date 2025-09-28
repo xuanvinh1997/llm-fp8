@@ -104,6 +104,8 @@ class ModelManager:
         """Create model with Transformer Engine."""
         if self.config.fp8_scenario == "mxfp8":
             from te_llama_mxfp8 import TELlamaForCausalLM
+        elif self.config.fp8_scenario == "hybrid":
+            from te_llama_hybrid import TELlamaForCausalLM
         else:
             from te_llama import TELlamaForCausalLM
 
@@ -423,7 +425,8 @@ class StabilityExperiment:
             {'precision': 'fp32', 'name': 'FP32 (Baseline)'},
             {'precision': 'bf16', 'name': 'BF16'},
             {'precision': 'fp8', 'scenario': 'default', 'name': 'FP8-E4M3'},
-            {'precision': 'fp8', 'scenario': 'mxfp8', 'name': 'FP8-MXFP8'}
+            {'precision': 'fp8', 'scenario': 'mxfp8', 'name': 'FP8-MXFP8'},
+            {'precision': 'fp8', 'scenario': 'hybrid', 'name': 'FP8-Hybrid'}
         ]
 
         # Metrics tracking
@@ -712,8 +715,8 @@ def create_argument_parser() -> argparse.ArgumentParser:
     )
     train_group.add_argument(
         "--fp8_scenario", type=str, default="default",
-        choices=["default", "mxfp8"],
-        help="FP8 recipe to use when mixed_precision is fp8"
+        choices=["default", "mxfp8", "hybrid"],
+        help="FP8 recipe to use when mixed_precision is fp8 (default: uniform E4M3, mxfp8: MXFP8 block scaling, hybrid: E4M3 for MLP/E5M2 for attn Q/K)"
     )
     train_group.add_argument(
         "--batch_size", type=int, default=8,

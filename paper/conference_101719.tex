@@ -46,7 +46,7 @@ Large language models, FP8 precision, mixed precision training, transformer opti
 
 The exponential growth in large language model (LLM) parameter counts and context lengths has created unprecedented computational and memory demands. Traditional mixed-precision approaches using FP16 and BF16 formats, while effective, still impose significant memory overhead that limits model scalability and training throughput. The introduction of 8-bit floating-point (FP8) formats \cite{micikevicius2022fp8formatsdeeplearning} offers the potential to halve memory requirements while maintaining numerical stability, but current implementations face challenges in optimally leveraging the distinct characteristics of available FP8 variants.
 
-NVIDIA's standardization of two FP8 formats—E4M3 (4-bit exponent, 3-bit mantissa) and E5M2 (5-bit exponent, 2-bit mantissa)—presents a fundamental trade-off between precision and dynamic range. E4M3 provides higher mantissa precision within a limited range, making it suitable for stable, dense computations, while E5M2 offers broader exponent coverage at the cost of mantissa resolution, better suited for operations with wide dynamic ranges \cite{nvidia2022fp8}.
+NVIDIA\'s standardization of two FP8 formats—E4M3 (4-bit exponent, 3-bit mantissa) and E5M2 (5-bit exponent, 2-bit mantissa)—presents a fundamental trade-off between precision and dynamic range. E4M3 provides higher mantissa precision within a limited range, making it suitable for stable, dense computations, while E5M2 offers broader exponent coverage at the cost of mantissa resolution, better suited for operations with wide dynamic ranges \cite{nvidia2022fp8}.
 
 Existing FP8 training approaches predominantly employ uniform format assignment strategies. For instance, DeepSeek-V3 \cite{deepseekv3} applies E4M3 universally across all transformer components, while NVIDIA's MXFP8 implementations \cite{nvidia2024mxfp8} focus on hardware-level optimizations without component-specific format selection. However, our analysis reveals that different transformer components exhibit distinct computational patterns that benefit from different FP8 formats.
 
@@ -214,34 +214,36 @@ Algorithm \ref{alg:fp8_training} presents our enhanced training procedure that i
 
 \subsection{Model Architectures and Scales}
 
-We evaluate our approach across three model scales to demonstrate scalability:
+We evaluate our approach across two model scales to demonstrate efficiency gains:
 
 \begin{itemize}
-\item \textbf{Llama-3.2-3B} \cite{meta2024llama3.2}: 3 billion parameters, 32 layers
-\item \textbf{Llama-3.1-8B} \cite{meta2024llama3.1}: 8 billion parameters, 32 layers  
+\item \textbf{Llama-3.2-3B} \cite{meta2024llama3.2}: 3 billion parameters, 32 layers, 32 attention heads
+\item \textbf{Llama-3.1-8B} \cite{meta2024llama3.1}: 8 billion parameters, 32 layers, 32 attention heads
 \end{itemize}
 
-This selection provides comprehensive coverage across contemporary LLM scales while enabling comparison between different architectural variants.
+These models represent practical scales for research environments while demonstrating the scalability of FP8 training approaches.
 
 \subsection{Dataset and Training Configuration}
 
 \textbf{Dataset:} We use OpenMathInstruct-2 \cite{toshniwal2024openmath2}, training on 100K instruction-response pairs from the corpus.
 
-\textbf{Training Setup:} Models are trained for 12 epochs with sequence length of 512 tokens. Table~\ref{tab:training_config} details the training configuration.
+\textbf{Training Setup:} Models are trained for 3 epochs with sequence length of 512 tokens. We use a reduced training schedule optimized for rapid experimentation and validation. Table~\ref{tab:training_config} details the training configuration.
 
 \begin{table}[htbp]
 \centering
 \caption{Training Configuration Across Model Scales}
-\begin{tabular}{@{}lccc@{}}
+\begin{tabular}{@{}lcc@{}}
 \toprule
 \textbf{Configuration} & \textbf{Llama-3.2-3B} & \textbf{Llama-3.1-8B} \\
 \midrule
-Batch Size (BF16) & 24 & 6  \\
-Batch Size (FP8) & 24 & 6  \\
+Batch Size (BF16) & 24 & 6 \\
+Batch Size (FP8) & 24 & 6 \\
 Sequence Length & 512 & 512 \\
 Learning Rate & 1e-5 & 1e-5 \\
-Epochs & 12 & 12 \\
+Epochs & 3 & 3 \\
 Training Samples & 100K & 100K \\
+Optimizer & AdamW & AdamW \\
+Gradient Accumulation & 4 & 4 \\
 \bottomrule
 \end{tabular}
 \label{tab:training_config}
@@ -249,12 +251,12 @@ Training Samples & 100K & 100K \\
 
 \subsection{Baseline Comparisons}
 
-We compare our approach against multiple baselines:
+We compare three precision configurations:
 
 \begin{enumerate}
-\item \textbf{BF16 Baseline}: Standard mixed-precision training with BF16
-\item \textbf{MXFP8}: NVIDIA's MXFP8 implementation with default settings
-\item \textbf{Our Method}: Layer-wise format assignment as proposed
+\item \textbf{BF16 Baseline}: Standard mixed-precision training with BF16, serving as the accuracy reference
+\item \textbf{MXFP8}: NVIDIA's MXFP8 block-wise scaling with E4M3 format
+\item \textbf{Our FP8 Method}: Layer-wise format assignment with E5M2 for attention Q/K and E4M3 for MLP/V/O projections
 \end{enumerate}
 
 \subsection{Hardware and Software Environment}
@@ -321,12 +323,12 @@ Key observations from our convergence analysis:
 
 Figure\ref{fig:stability_analysis} presents gradient norm evolution and activation distribution analysis, demonstrating that our format assignment strategy maintains better numerical stability compared to uniform FP8 approaches.
 
-\begin{figure}[htbp]
-    \centering
-    \includegraphics[width=1\linewidth]{stability_analysis.png}
-    \caption{Numerical stability analysis showing gradient norms and activation distributions}
-    \label{fig:stability_analysis}
-\end{figure}
+% \begin{figure}[htbp]
+%     \centering
+%     \includegraphics[width=1\linewidth]{stability_analysis.png}
+%     \caption{Numerical stability analysis showing gradient norms and activation distributions}
+%     \label{fig:stability_analysis}
+% \end{figure}
 
 The selective use of E5M2 for high-dynamic-range operations (attention queries/keys) and E4M3 for stable operations (MLPs, values) results in X\% lower gradient variance and X\% more consistent activation distributions compared to uniform approaches.
 

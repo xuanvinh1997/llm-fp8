@@ -35,6 +35,13 @@ export NVTE_FUSED_ATTN=0
 python train_fp8.py   --model_name meta-llama/Llama-3.2-3B   --dataset_name nvidia/OpenMathInstruct-2   --batch_size 16   --mixed_precision fp8   --fp8_scenario mxfp8   --max_seq_length 512   --split_name train_1M   --use_te   --use_wandb   --wandb_project llm-fp8   --wandb_run_name llama32-3b-mxfp8 --num_of_samples 100000
 ```
 
+3b - fp8 hybrid method (instead of mxfp8)
+```bash
+export NVTE_FLASH_ATTN=1
+export NVTE_FUSED_ATTN=0
+python train_fp8.py   --model_name meta-llama/Llama-3.2-3B   --dataset_name nvidia/OpenMathInstruct-2   --batch_size 16   --mixed_precision fp8   --fp8_scenario hybrid   --max_seq_length 512   --split_name train_1M   --use_te   --use_wandb   --wandb_project llm-fp8   --wandb_run_name llama32-3b-hybrid --num_of_samples 100000
+```
+
 3b - bf16 method
 ```bash
 export NVTE_FLASH_ATTN=1
