@@ -33,14 +33,8 @@ from transformers.utils.hub import get_checkpoint_shard_files
 from transformer_engine.common.recipe import Format, DelayedScaling
 
 
-# Define FP8 formats for different components
-E4M3_FORMAT = Format.E4M3  # Higher precision (4-bit exponent, 3-bit mantissa)
-E5M2_FORMAT = Format.E5M2  # Wider range (5-bit exponent, 2-bit mantissa)
-
 # Create recipes for different components
-mlp_recipe = DelayedScaling(fp8_format=E4M3_FORMAT, amax_history_len=16, amax_compute_algo="max")
-attn_qk_recipe = DelayedScaling(fp8_format=E5M2_FORMAT, amax_history_len=16, amax_compute_algo="max")
-attn_vo_recipe = DelayedScaling(fp8_format=E4M3_FORMAT, amax_history_len=16, amax_compute_algo="max")
+recipe = DelayedScaling(fp8_format=Format.HYBRID, amax_history_len=16, amax_compute_algo="max")
 
 
 @contextmanager
@@ -137,12 +131,12 @@ class TELlamaDecoderLayer(torch.nn.Module):
 
         # Attention with hybrid FP8 formats
         # Q and K projections with E5M2 (wider dynamic range)
-        with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=attn_qk_recipe):
+        with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=recipe):
             query_states = self.q_proj(normed_hidden_states)
             key_states = self.k_proj(normed_hidden_states)
 
         # V projection with E4M3 (higher precision)
-        with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=attn_vo_recipe):
+        with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=recipe):
             value_states = self.v_proj(normed_hidden_states)
 
         # Reshape for attention computation
@@ -161,14 +155,14 @@ class TELlamaDecoderLayer(torch.nn.Module):
         )
 
         # Output projection with E4M3 (higher precision)
-        with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=attn_vo_recipe):
+        with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=recipe):
             attn_output = self.o_proj(attn_output)
 
         # Residual connection
         hidden_states = hidden_states + attn_output
 
         # MLP with E4M3 (higher precision for stable computations)
-        with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=mlp_recipe):
+        with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=recipe):
             ffn_out = self.layernorm_mlp(hidden_states)
 
         # Final residual connection
