@@ -171,11 +171,11 @@ class Trainer:
         if self.config.mixed_precision == "fp8" and self.config.use_te:
             # Only use FP8 kwargs with Accelerate when using TE models
             fp8_kwargs = FP8Handler.create_fp8_kwargs(self.config)
-
+        print(self.config.mixed_precision)
         # Initialize accelerator
         accelerator = Accelerator(
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
-            mixed_precision=self.config.mixed_precision if not self.config.use_te else "bf16",
+            mixed_precision=self.config.mixed_precision,
             kwargs_handlers=fp8_kwargs,
         )
         

@@ -35,7 +35,7 @@ vinhnv@vnu.edu.vn}}
 \maketitle
 
 \begin{abstract}
-Recent advances in low-precision arithmetic have made \textbf{FP8} \cite{micikevicius2022fp8formatsdeeplearning} a compelling alternative to FP16 and BF16 for training and inference of large language models. While existing approaches typically apply uniform FP8 formats, we propose a systematic layer-wise format specialization strategy that optimally assigns E4M3 and E5M2 formats based on the distinct computational characteristics of different transformer components. Our approach assigns E4M3 to multi-layer perceptrons (MLPs) to leverage higher mantissa precision for stable feed-forward computations, while employing E5M2 for attention query-key operations that require extended exponent ranges for handling dynamic activation patterns. Comprehensive experiments across three model scales—Llama-3.2-3B, Llama-3.1-8B trained on 1 million samples from the OpenMathInstruct-2 corpus demonstrate that our method achieves performance comparable to BF16 baselines while reducing peak memory usage by up to X\% and delivering X\% throughput improvements on NVIDIA Blackwell architecture GPUs.
+Recent advances in low-precision arithmetic have made \textbf{FP8} \cite{micikevicius2022fp8formatsdeeplearning} a compelling alternative to FP16 and BF16 for training and inference of large language models. While existing approaches typically apply uniform FP8 formats, we propose a systematic layer-wise format specialization strategy that optimally assigns E4M3 and E5M2 formats based on the distinct computational characteristics of different transformer components. Our approach assigns E4M3 to multi-layer perceptrons (MLPs) to leverage higher mantissa precision for stable feed-forward computations, while employing E5M2 for attention query-key operations that require extended exponent ranges for handling dynamic activation patterns. Comprehensive experiments across three model scales—Llama-3.2-3B, Llama-3.1-8B trained on 100K samples from the OpenMathInstruct-2 corpus demonstrate that our method achieves performance comparable to BF16 baselines while reducing peak memory usage by up to X\% and delivering X\% throughput improvements on NVIDIA Blackwell architecture GPUs.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -103,13 +103,13 @@ Our approach differs from existing FP8 implementations in several key aspects:
 To develop our layer-wise format assignment strategy, we conducted extensive profiling of transformer training dynamics across different components. Our analysis reveals three key insights:
 
 \subsubsection{MLP Computational Characteristics}
-Multi-layer perceptrons in transformers exhibit relatively stable activation and gradient patterns. The feed-forward layers process information through dense matrix multiplications with weight matrices that undergo gradual updates during training. Figure~\ref{fig:mlp_analysis} illustrates the activation distribution patterns in MLP layers, showing concentrated value ranges that benefit from \textbf{E4M3}\'s higher mantissa precision.
+Multi-layer perceptrons in transformers exhibit relatively stable activation and gradient patterns. The feed-forward layers process information through dense matrix multiplications with weight matrices that undergo gradual updates during training. Figure\ref{fig:mlp_analysis} illustrates the activation distribution patterns in MLP layers, showing concentrated value ranges that benefit from \textbf{E4M3}\'s higher mantissa precision.
 
 \subsubsection{Attention Mechanism Dynamics}
 Self-attention mechanisms demonstrate significantly more dynamic behavior, particularly in query-key interactions. The scaled dot-product attention operation produces activations with wide value ranges, especially before and after the softmax operation. The attention weights themselves can span several orders of magnitude, necessitating the broader exponent range provided by \textbf{E5M2} format.
 
 \subsubsection{Gradient Flow Patterns}
-Backpropagation through attention layers generates gradients with broader dynamic ranges compared to MLP gradients. This is particularly pronounced in the query and key projection gradients, where the chain rule through the attention mechanism amplifies gradient variance. Figure~\ref{fig:gradient_analysis} demonstrates these patterns across different model components.
+Backpropagation through attention layers generates gradients with broader dynamic ranges compared to MLP gradients. This is particularly pronounced in the query and key projection gradients, where the chain rule through the attention mechanism amplifies gradient variance. Figure\ref{fig:gradient_analysis} demonstrates these patterns across different model components.
 
 \subsection{Layer-Wise Format Assignment Strategy}
 
@@ -138,7 +138,16 @@ This assignment strategy optimizes the precision-range trade-off for each compon
 
 \subsection{Implementation Architecture}
 
-Our implementation leverages NVIDIA's Transformer Engine to provide seamless integration with existing PyTorch workflows. Algorithm~\ref{alg:layer_replacement} outlines our systematic module replacement strategy.
+Our implementation leverages NVIDIA's Transformer Engine to provide seamless integration with existing PyTorch workflows. Figure \ref{fig:fp8_architecture} illustrates the layer-wise FP8 format assignment within the transformer architecture, showing how E4M3 is applied to MLP components while E5M2 is selectively used for attention query-key operations.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.85\columnwidth]{fp8_convert.png}
+    \caption{Layer-wise FP8 format assignment architecture. The diagram shows a transformer block with selective application of E4M3 (red) for MLP layers and mixed E4M3/E5M2 (purple) for attention mechanisms. The GQA (Grouped Query Attention) module uses E5M2 for query-key operations requiring extended dynamic range, while E4M3 is applied to value projections and feed-forward networks for higher precision within stable ranges.}
+    \label{fig:fp8_architecture}
+\end{figure}
+
+Algorithm~\ref{alg:layer_replacement} outlines our systematic module replacement strategy.
 
 \begin{algorithm}[hbt!]
 \caption{Layer-Wise FP8 Format Assignment}
@@ -167,7 +176,7 @@ Our implementation leverages NVIDIA's Transformer Engine to provide seamless int
 
 \subsection{Training Loop Integration}
 
-Algorithm~\ref{alg:fp8_training} presents our enhanced training procedure that incorporates dynamic format selection and optimized scaling strategies.
+Algorithm \ref{alg:fp8_training} presents our enhanced training procedure that incorporates dynamic format selection and optimized scaling strategies.
 
 \begin{algorithm}[hbt!]
 \caption{FP8 Training Step with Layer-Wise Format Assignment}
@@ -216,7 +225,7 @@ This selection provides comprehensive coverage across contemporary LLM scales wh
 
 \subsection{Dataset and Training Configuration}
 
-\textbf{Dataset:} We use OpenMathInstruct-2 \cite{toshniwal2024openmath2}, training on 1 million instruction-response pairs from the corpus.
+\textbf{Dataset:} We use OpenMathInstruct-2 \cite{toshniwal2024openmath2}, training on 100K instruction-response pairs from the corpus.
 
 \textbf{Training Setup:} Models are trained for 12 epochs with sequence length of 512 tokens. Table~\ref{tab:training_config} details the training configuration.
 
@@ -232,7 +241,7 @@ Batch Size (FP8) & 24 & 6  \\
 Sequence Length & 512 & 512 \\
 Learning Rate & 1e-5 & 1e-5 \\
 Epochs & 12 & 12 \\
-Training Samples & 1M & 1M\\
+Training Samples & 100K & 100K \\
 \bottomrule
 \end{tabular}
 \label{tab:training_config}
@@ -291,7 +300,7 @@ Our experiments demonstrate that FP8 training reduces memory consumption by 10.3
 
 \subsection{Convergence and Model Quality}
 
-Figure~\ref{fig:convergence_analysis} illustrates the training loss curves across different precision configurations. All methods start from an initial loss of approximately 1.6 and demonstrate stable convergence throughout the 12-epoch training period.
+Figure \ref{fig:convergence_analysis} illustrates the training loss curves across different precision configurations. All methods start from an initial loss of approximately 1.6 and demonstrate stable convergence throughout the 12-epoch training period.
 
 \begin{figure}[htbp]
     \centering
@@ -310,7 +319,7 @@ Key observations from our convergence analysis:
 
 \subsection{Numerical Stability Analysis}
 
-Figure~\ref{fig:stability_analysis} presents gradient norm evolution and activation distribution analysis, demonstrating that our format assignment strategy maintains better numerical stability compared to uniform FP8 approaches.
+Figure\ref{fig:stability_analysis} presents gradient norm evolution and activation distribution analysis, demonstrating that our format assignment strategy maintains better numerical stability compared to uniform FP8 approaches.
 
 \begin{figure}[htbp]
     \centering
@@ -321,27 +330,6 @@ Figure~\ref{fig:stability_analysis} presents gradient norm evolution and activat
 
 The selective use of E5M2 for high-dynamic-range operations (attention queries/keys) and E4M3 for stable operations (MLPs, values) results in X\% lower gradient variance and X\% more consistent activation distributions compared to uniform approaches.
 
-\subsection{Ablation Studies}
-
-Table~\ref{tab:ablation} presents ablation results examining different components of our approach.
-
-\begin{table}[htbp]
-\centering
-\caption{Ablation Study Results (Llama-3.2-3B)}
-\begin{tabular}{@{}lcccc@{}}
-\toprule
-\textbf{Configuration} & \textbf{Memory} & \textbf{Speed} & \textbf{Accuracy} & \textbf{Stability} \\
-\midrule
-Only MLP E4M3 & X\% & X\% & X\% & X \\
-Only Attn E5M2/E4M3 & X\% & X\% & X\% & X \\
-Full Assignment & X\% & X\% & X\% & X \\
-No Gradient Format & X\% & X\% & X\% & X \\
-\bottomrule
-\end{tabular}
-\label{tab:ablation}
-\end{table}
-
-The ablation study confirms that both MLP and attention format assignments contribute to overall performance, with the complete strategy yielding optimal results.
 \section{Discussion}
 
 \subsection{Performance Analysis}
@@ -355,10 +343,21 @@ Our experimental results on Llama-3.2-3B reveal several important insights about
 \textbf{Practical Implications:} The 55-hour reduction in training time per run has significant practical implications for model development, particularly for research teams with limited computational resources. The memory savings also enable training with larger batch sizes or longer sequences within the same hardware constraints.
 
 \subsection{Limitations and Future Work}
-...
+
+Several limitations warrant discussion and present opportunities for future research:
+
+\textbf{Scale Coverage:} Our current evaluation is limited to 3B and 8B model scales. Extending to larger models (70B+) would provide stronger validation of the approach's scalability and may reveal scale-dependent optimization opportunities.
+
+\textbf{Architecture Generalization:} While we evaluate on Llama architectures, exploring other transformer variants (e.g., mixture-of-experts, sparse transformers) could reveal architecture-specific format assignment strategies.
+
+\textbf{Dynamic Format Selection:} Our static assignment strategy could be extended to dynamic, layer-specific or even token-specific format selection based on runtime characteristics, potentially improving both efficiency and accuracy.
+
+\textbf{Hardware Co-design:} Closer integration with hardware-specific optimizations, particularly for emerging AI accelerators with native FP8 support, could yield additional performance gains.
+
+Future work will focus on scaling experiments to larger models, developing adaptive format selection mechanisms, and exploring synergies with other efficiency techniques such as model pruning and knowledge distillation.
 \section{Conclusion}
 
-This work presents a systematic layer-wise FP8 format assignment strategy for efficient transformer training. Through experimental evaluation on Llama-3.2-3B trained on 1 million samples over 12 epochs, we demonstrate that FP8 training achieves 10.3\% memory reduction and 39.3\% training acceleration compared to BF16 baseline, with a manageable 15-20\% slower convergence rate.
+This work presents a systematic layer-wise FP8 format assignment strategy for efficient transformer training. Through experimental evaluation on Llama-3.2-3B trained on 100K samples over 12 epochs, we demonstrate that FP8 training achieves 10.3\% memory reduction and 39.3\% training acceleration compared to BF16 baseline, with a manageable 15-20\% slower convergence rate.
 
 Our results show that strategic assignment of E4M3 and E5M2 formats based on component characteristics provides a viable approach to FP8 training, achieving performance comparable to NVIDIA's hardware-optimized MXFP8 implementation. The substantial reduction in training time—from 140 to 85 hours—represents significant computational savings that can accelerate research and development cycles.
 
