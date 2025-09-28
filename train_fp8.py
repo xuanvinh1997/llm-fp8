@@ -37,6 +37,12 @@ from config import TrainingConfig
 from data import DataManager
 from utils import GPUMonitor
 
+import numpy as np
+import pandas as pd
+from scipy import stats
+from typing import Dict, List, Optional
+from collections import deque
+
 
 class ModelManager:
     """Handles model downloading, initialization, and configuration."""
@@ -208,12 +214,19 @@ class Trainer:
         
         return accelerator, model, optimizer, train_loader, scheduler, eval_loader
     
-    def train(self, model, accelerator, train_loader, eval_loader, 
+    def train(self, model, accelerator, train_loader, eval_loader,
               optimizer, scheduler, writer: SummaryWriter, wandb_run=None):
         """Execute the training loop."""
         model.train()
         step_count = 0
-        
+
+        # Initialize stability experiment tracker
+        stability_tracker = StabilityExperiment(
+            model_name=self.config.model_name,
+            dataset_name=self.config.dataset_name,
+            wandb_run=wandb_run
+        )
+
         # Setup timing
         start_time = torch.cuda.Event(enable_timing=True)
         end_time = torch.cuda.Event(enable_timing=True)
@@ -231,19 +244,29 @@ class Trainer:
                 # Training epoch
                 step_count = self._train_epoch(
                     model, accelerator, train_loader, optimizer, scheduler,
-                    writer, wandb_run, step_count, total_steps, pbar
+                    writer, wandb_run, step_count, total_steps, pbar, stability_tracker
                 )
                 
                 # Evaluation
                 self._evaluate(model, accelerator, eval_loader, writer, 
                               wandb_run, epoch, step_count)
         
+        # Generate stability report
+        if accelerator.is_main_process:
+            stability_report = stability_tracker.generate_stability_report()
+            accelerator.print("\n=== Stability Analysis Report ===")
+            for metric_name, stats in stability_report['metrics'].items():
+                accelerator.print(f"\n{metric_name.upper()} Statistics:")
+                for stat_name, value in stats.items():
+                    if value is not None:
+                        accelerator.print(f"  {stat_name}: {value:.6f}")
+
         # Finalize training
         self._finalize_training(accelerator, start_time, end_time, step_count,
                                writer, wandb_run)
     
     def _train_epoch(self, model, accelerator, train_loader, optimizer, scheduler,
-                    writer, wandb_run, step_count, total_steps, pbar):
+                    writer, wandb_run, step_count, total_steps, pbar, stability_tracker=None):
         """Train for one epoch."""
         for batch in train_loader:
             step_start = time.perf_counter()
@@ -260,11 +283,20 @@ class Trainer:
                 
                 # Backward pass
                 accelerator.backward(loss)
-                accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                grad_norm = accelerator.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
-                
+
+                # Track stability metrics if tracker is available
+                if stability_tracker:
+                    stability_tracker.track_step_metrics(
+                        loss=loss.item(),
+                        gradient_norm=grad_norm.item() if grad_norm is not None else 0.0,
+                        learning_rate=scheduler.get_last_lr()[0],
+                        activations=outputs.hidden_states[-1] if hasattr(outputs, 'hidden_states') and outputs.hidden_states else None
+                    )
+
                 step_count += 1
                 pbar.update(1)
                 pbar.set_postfix(loss=loss.item())
@@ -369,6 +401,254 @@ class Trainer:
         accelerator.print(
             f"Training completed: {step_count} steps, {ms_per_step:.0f} ms/step"
         )
+
+
+class StabilityExperiment:
+    """Tracks and analyzes training stability metrics for different precision configurations."""
+
+    def __init__(self, model_name: str, dataset_name: str, wandb_run=None):
+        """
+        Initialize stability experiment tracker.
+
+        Args:
+            model_name: Name of the model being trained
+            dataset_name: Name of the dataset being used
+            wandb_run: Optional wandb run object for logging
+        """
+        self.model_name = model_name
+        self.dataset_name = dataset_name
+        self.wandb_run = wandb_run
+
+        self.configurations = [
+            {'precision': 'fp32', 'name': 'FP32 (Baseline)'},
+            {'precision': 'bf16', 'name': 'BF16'},
+            {'precision': 'fp8', 'scenario': 'default', 'name': 'FP8-E4M3'},
+            {'precision': 'fp8', 'scenario': 'mxfp8', 'name': 'FP8-MXFP8'}
+        ]
+
+        # Metrics tracking
+        self.metrics_history = {
+            'loss': deque(maxlen=10000),
+            'gradient_norm': deque(maxlen=10000),
+            'learning_rate': deque(maxlen=10000),
+            'activation_mean': deque(maxlen=10000),
+            'activation_std': deque(maxlen=10000)
+        }
+
+        self.results = {}
+        self.stability_stats = {}
+
+    def track_step_metrics(self, loss: float, gradient_norm: float,
+                          learning_rate: float, activations: Optional[torch.Tensor] = None):
+        """
+        Track metrics for a single training step.
+
+        Args:
+            loss: Training loss value
+            gradient_norm: L2 norm of gradients
+            learning_rate: Current learning rate
+            activations: Optional tensor of model activations
+        """
+        self.metrics_history['loss'].append(loss)
+        self.metrics_history['gradient_norm'].append(gradient_norm)
+        self.metrics_history['learning_rate'].append(learning_rate)
+
+        if activations is not None:
+            act_mean = activations.mean().item()
+            act_std = activations.std().item()
+            self.metrics_history['activation_mean'].append(act_mean)
+            self.metrics_history['activation_std'].append(act_std)
+
+        # Log to wandb if available
+        if self.wandb_run:
+            wandb.log({
+                'stability/loss': loss,
+                'stability/gradient_norm': gradient_norm,
+                'stability/learning_rate': learning_rate,
+                'stability/activation_mean': act_mean if activations is not None else None,
+                'stability/activation_std': act_std if activations is not None else None,
+            })
+
+    def compute_stability_statistics(self, metric_name: str = 'loss') -> Dict:
+        """
+        Compute comprehensive statistical measures for a given metric.
+
+        Args:
+            metric_name: Name of the metric to analyze
+
+        Returns:
+            Dictionary containing statistical measures
+        """
+        if metric_name not in self.metrics_history:
+            raise ValueError(f"Metric {metric_name} not tracked")
+
+        metrics = np.array(self.metrics_history[metric_name])
+
+        if len(metrics) == 0:
+            return {}
+
+        results = {
+            # Central tendency
+            'mean': np.mean(metrics),
+            'median': np.median(metrics),
+
+            # Variability
+            'std': np.std(metrics),
+            'variance': np.var(metrics),
+            'cv': np.std(metrics) / np.mean(metrics) if np.mean(metrics) != 0 else 0,  # Coefficient of variation
+            'iqr': np.percentile(metrics, 75) - np.percentile(metrics, 25),
+
+            # Stability indicators
+            'max_deviation': np.max(np.abs(metrics - np.mean(metrics))),
+            'range': np.max(metrics) - np.min(metrics),
+
+            # Convergence metrics
+            'convergence_rate': self._compute_convergence_rate(metrics),
+            'oscillation_index': self._compute_oscillation_index(metrics),
+
+            # Stability ratio (early vs late training)
+            'stability_ratio': self._compute_stability_ratio(metrics),
+        }
+
+        # Statistical tests (only if enough data)
+        if len(metrics) > 8:
+            try:
+                results['normality_pvalue'] = stats.normaltest(metrics)[1]
+            except:
+                results['normality_pvalue'] = None
+
+        return results
+
+    def _compute_convergence_rate(self, metrics: np.ndarray) -> float:
+        """
+        Compute the convergence rate using exponential fit.
+
+        Args:
+            metrics: Array of metric values
+
+        Returns:
+            Convergence rate (negative values indicate convergence)
+        """
+        if len(metrics) < 10:
+            return 0.0
+
+        x = np.arange(len(metrics))
+
+        # Fit exponential decay: y = a * exp(b * x) + c
+        # Using linear regression on log scale for simplicity
+        try:
+            # Remove zeros and negatives for log
+            positive_metrics = metrics[metrics > 0]
+            if len(positive_metrics) < 10:
+                return 0.0
+
+            x_positive = x[:len(positive_metrics)]
+            coeffs = np.polyfit(x_positive, np.log(positive_metrics), 1)
+            return coeffs[0]  # Return the slope (convergence rate)
+        except:
+            return 0.0
+
+    def _compute_oscillation_index(self, metrics: np.ndarray) -> float:
+        """
+        Compute oscillation index to measure training stability.
+
+        Args:
+            metrics: Array of metric values
+
+        Returns:
+            Oscillation index (lower is more stable)
+        """
+        if len(metrics) < 2:
+            return 0.0
+
+        # Calculate successive differences
+        diffs = np.diff(metrics)
+
+        # Count sign changes (oscillations)
+        sign_changes = np.sum(np.diff(np.sign(diffs)) != 0)
+
+        # Normalize by length
+        oscillation_index = sign_changes / len(diffs)
+
+        return oscillation_index
+
+    def _compute_stability_ratio(self, metrics: np.ndarray) -> float:
+        """
+        Compute stability ratio comparing early vs late training variance.
+
+        Args:
+            metrics: Array of metric values
+
+        Returns:
+            Stability ratio (< 1 means training is stabilizing)
+        """
+        if len(metrics) < 100:
+            return 1.0
+
+        # Split into early and late phases
+        split_point = len(metrics) // 2
+        early_metrics = metrics[:split_point]
+        late_metrics = metrics[split_point:]
+
+        early_std = np.std(early_metrics)
+        late_std = np.std(late_metrics)
+
+        if late_std == 0:
+            return 0.0
+
+        return early_std / late_std
+
+    def generate_stability_report(self) -> Dict:
+        """
+        Generate comprehensive stability report for all tracked metrics.
+
+        Returns:
+            Dictionary containing stability analysis for all metrics
+        """
+        report = {
+            'model': self.model_name,
+            'dataset': self.dataset_name,
+            'metrics': {}
+        }
+
+        for metric_name in self.metrics_history.keys():
+            if len(self.metrics_history[metric_name]) > 0:
+                report['metrics'][metric_name] = self.compute_stability_statistics(metric_name)
+
+        # Log to wandb if available
+        if self.wandb_run:
+            # Flatten the nested dictionary for wandb
+            for metric_name, stats in report['metrics'].items():
+                for stat_name, value in stats.items():
+                    if value is not None:
+                        wandb.summary[f'stability_report/{metric_name}/{stat_name}'] = value
+
+        return report
+
+    def compare_configurations(self, results_dict: Dict[str, Dict]) -> pd.DataFrame:
+        """
+        Compare stability metrics across different precision configurations.
+
+        Args:
+            results_dict: Dictionary mapping configuration names to their metrics
+
+        Returns:
+            DataFrame with comparison results
+        """
+        comparison_data = []
+
+        for config_name, metrics in results_dict.items():
+            row = {'configuration': config_name}
+            row.update(metrics)
+            comparison_data.append(row)
+
+        df = pd.DataFrame(comparison_data)
+
+        # Log comparison to wandb if available
+        if self.wandb_run:
+            wandb.log({'stability_comparison': wandb.Table(dataframe=df)})
+
+        return df
 
 
 class ModelSaver:
