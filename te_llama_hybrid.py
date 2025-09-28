@@ -2,14 +2,6 @@
 #
 # See LICENSE for license information.
 
-"""
-Hybrid FP8 Implementation for Llama models
-Implements layer-wise format assignment strategy:
-- E4M3 for MLP components (higher precision for stable computations)
-- E5M2 for attention Q/K projections (wider dynamic range)
-- E4M3 for attention V/O projections (higher precision)
-"""
-
 import os
 import re
 import gc
@@ -33,264 +25,214 @@ from transformers.utils.hub import get_checkpoint_shard_files
 from transformer_engine.common.recipe import Format, DelayedScaling
 
 
-# Create recipes for different components
-recipe = DelayedScaling(fp8_format=Format.HYBRID, amax_history_len=16, amax_compute_algo="max")
-
-
 @contextmanager
 def replace_decoder(te_decoder_cls):
     """
     Replace `LlamaDecoderLayer` with custom `TELlamaDecoderLayer`.
     """
-    original_llama_decoder_cls = (
-        transformers.models.llama.modeling_llama.LlamaDecoderLayer
-    )
+    original_llama_decoder_cls = transformers.models.llama.modeling_llama.LlamaDecoderLayer
     transformers.models.llama.modeling_llama.LlamaDecoderLayer = te_decoder_cls
     try:
         yield
     finally:
-        transformers.models.llama.modeling_llama.LlamaDecoderLayer = (
-            original_llama_decoder_cls
-        )
-
-
+        transformers.models.llama.modeling_llama.LlamaDecoderLayer = original_llama_decoder_cls
+recipe = DelayedScaling(fp8_format=Format.HYBRID, amax_history_len=16, amax_compute_algo="max")
 class TELlamaDecoderLayer(torch.nn.Module):
-    """
-    Hybrid FP8 Llama Decoder Layer with layer-wise format assignment.
-
-    Format assignment strategy:
-    - MLP: E4M3 for stable feed-forward computations
-    - Attention Q/K: E5M2 for wide dynamic range in query-key interactions
-    - Attention V/O: E4M3 for higher precision in value computations
-    """
-
     def __init__(self, config, *args, dropout_rate=0.0, **kwargs):
         super().__init__()
-
-        # Create attention components with separate linear layers for hybrid format assignment
-        self.q_proj = te.pytorch.Linear(
-            config.hidden_size,
-            config.hidden_size,
+        te.pytorch.TransformerLayer
+        self.self_attention = te.pytorch.MultiheadAttention(
+            hidden_size=config.hidden_size, 
+            num_attention_heads=config.num_attention_heads,
             bias=False,
+            layernorm_epsilon=config.rms_norm_eps,
+            attention_dropout=dropout_rate,
+            fuse_qkv_params=False,
+            normalization="RMSNorm",
+            num_gqa_groups=config.num_key_value_heads,
+            qkv_format="bshd",
+            input_layernorm=True
         )
 
-        self.k_proj = te.pytorch.Linear(
-            config.hidden_size,
-            config.num_key_value_heads * (config.hidden_size // config.num_attention_heads),
-            bias=False,
-        )
-
-        self.v_proj = te.pytorch.Linear(
-            config.hidden_size,
-            config.num_key_value_heads * (config.hidden_size // config.num_attention_heads),
-            bias=False,
-        )
-
-        self.o_proj = te.pytorch.Linear(
-            config.hidden_size,
-            config.hidden_size,
-            bias=False,
-        )
-
-        # Layer normalization for attention
-        self.input_layernorm = te.pytorch.RMSNorm(
-            config.hidden_size,
-            eps=config.rms_norm_eps,
-        )
-
-        # MLP components
         self.layernorm_mlp = te.pytorch.LayerNormMLP(
-            hidden_size=config.hidden_size,
+            hidden_size=config.hidden_size, 
             ffn_hidden_size=config.intermediate_size,
             normalization="RMSNorm",
             activation="swiglu",
-            layernorm_epsilon=config.rms_norm_eps,
         )
 
-        # Store config for attention computation
-        self.config = config
-        self.num_heads = config.num_attention_heads
-        self.num_kv_heads = config.num_key_value_heads
-        self.head_dim = config.hidden_size // config.num_attention_heads
-
-        # Rotary position embedding
-        te_rope = RotaryPositionEmbedding(self.head_dim)
+        te_rope = RotaryPositionEmbedding(config.hidden_size // config.num_attention_heads)
         self.te_rope_emb = te_rope(max_seq_len=config.max_position_embeddings).cuda()
 
     def forward(self, hidden_states, attention_mask=None, **kwargs):
-        # Type checking
+        # check type is fp8
         if not isinstance(hidden_states, torch.Tensor):
             raise TypeError("hidden_states must be a torch.Tensor")
         if attention_mask is not None and not isinstance(attention_mask, torch.Tensor):
             raise TypeError("attention_mask must be a torch.Tensor")
-
-        batch_size, seq_len, _ = hidden_states.shape
-
-        # Layer norm before attention
-        normed_hidden_states = self.input_layernorm(hidden_states)
-
-        # Attention with hybrid FP8 formats
-        # Q and K projections with E5M2 (wider dynamic range)
+        # Define the FP8 recipes for attention and MLP
+        # print("dtype of hidden_states:", hidden_states.dtype)
         with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=recipe):
-            query_states = self.q_proj(normed_hidden_states)
-            key_states = self.k_proj(normed_hidden_states)
-
-        # V projection with E4M3 (higher precision)
-        with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=recipe):
-            value_states = self.v_proj(normed_hidden_states)
-
-        # Reshape for attention computation
-        query_states = query_states.view(batch_size, seq_len, self.num_heads, self.head_dim)
-        key_states = key_states.view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
-        value_states = value_states.view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
-
-        # Apply rotary position embeddings
-        if self.te_rope_emb is not None:
-            query_states = self._apply_rotary_pos_emb(query_states, self.te_rope_emb)
-            key_states = self._apply_rotary_pos_emb(key_states, self.te_rope_emb)
-
-        # Compute attention (keeping computation in higher precision)
-        attn_output = self._compute_attention(
-            query_states, key_states, value_states, attention_mask
-        )
-
-        # Output projection with E4M3 (higher precision)
-        with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=recipe):
-            attn_output = self.o_proj(attn_output)
-
-        # Residual connection
-        hidden_states = hidden_states + attn_output
-
-        # MLP with E4M3 (higher precision for stable computations)
+            attn_out = self.self_attention(hidden_states, attention_mask=attention_mask, rotary_pos_emb=self.te_rope_emb)
+        hidden_states = hidden_states + attn_out
         with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=recipe):
             ffn_out = self.layernorm_mlp(hidden_states)
-
-        # Final residual connection
         hidden_states = hidden_states + ffn_out
-
         return hidden_states
-
-    def _apply_rotary_pos_emb(self, x, rope_emb):
-        """Apply rotary position embeddings to input tensor."""
-        # Simplified rotary embedding application
-        # In practice, this would use the full RotaryPositionEmbedding logic
-        return x
-
-    def _compute_attention(self, query_states, key_states, value_states, attention_mask):
-        """Compute scaled dot-product attention."""
-        batch_size, seq_len, _, head_dim = query_states.shape
-
-        # Transpose for attention computation: [batch, num_heads, seq_len, head_dim]
-        query_states = query_states.transpose(1, 2)
-        key_states = key_states.transpose(1, 2)
-        value_states = value_states.transpose(1, 2)
-
-        # Handle grouped query attention if needed
-        if self.num_kv_heads != self.num_heads:
-            key_states = self._repeat_kv(key_states, self.num_heads // self.num_kv_heads)
-            value_states = self._repeat_kv(value_states, self.num_heads // self.num_kv_heads)
-
-        # Compute attention scores
-        attn_weights = torch.matmul(query_states, key_states.transpose(-1, -2)) / (head_dim ** 0.5)
-
-        # Apply attention mask if provided
-        if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
-
-        # Softmax
-        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1)
-
-        # Apply attention to values
-        attn_output = torch.matmul(attn_weights, value_states)
-
-        # Transpose back and reshape: [batch, seq_len, hidden_size]
-        attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.view(batch_size, seq_len, -1)
-
-        return attn_output
-
-    def _repeat_kv(self, hidden_states, n_rep):
-        """Repeat key/value heads for grouped query attention."""
-        if n_rep == 1:
-            return hidden_states
-        batch, num_kv_heads, slen, head_dim = hidden_states.shape
-        hidden_states = hidden_states[:, :, None, :, :].expand(
-            batch, num_kv_heads, n_rep, slen, head_dim
-        )
-        return hidden_states.reshape(batch, num_kv_heads * n_rep, slen, head_dim)
 
 
 class TELlamaForCausalLM:
     """
-    LlamaForCausalLM with Hybrid FP8 support through Transformer Engine.
+    Causal LM created with `LlamaModel`. The underlying `LlamaDecoderLayer`
+    class is monkey-patched with `TELlamaDecoderLayer` class before
+    initializing the causal LM with `LlamaForCausalLM`.
 
-    This implementation uses layer-wise format assignment:
-    - E4M3 for MLP layers (higher precision)
-    - E5M2 for attention Q/K (wider dynamic range)
-    - E4M3 for attention V/O (higher precision)
+    Args:
+        config: LlamaConfig
     """
 
     def __new__(cls, config: LlamaConfig):
-        with replace_decoder(TELlamaDecoderLayer):
+        with replace_decoder(te_decoder_cls=TELlamaDecoderLayer):
             llama_for_causal_lm = LlamaForCausalLM(config)
-
-        # Initialize TE modules
-        for layer_idx, layer in enumerate(llama_for_causal_lm.model.layers):
-            # Log format assignment for transparency
-            print(f"Layer {layer_idx}: MLP=E4M3, Attn Q/K=E5M2, Attn V/O=E4M3")
-
         return llama_for_causal_lm
 
     @classmethod
-    def from_pretrained_local(cls, model_path, config, **kwargs):
-        """Load model from local checkpoint with hybrid FP8 configuration."""
-        with replace_decoder(TELlamaDecoderLayer):
-            model = LlamaForCausalLM(config)
+    def from_pretrained_local(cls, pretrained_model_name_or_path, *args, config, **kwargs):
+        """
+        Custom method adapted from `from_pretrained` method in HuggingFace
+        Transformers repo: https://github.com/huggingface/transformers/blob/f497f564bb76697edab09184a252fc1b1a326d1e/src/transformers/modeling_utils.py#L2579
+        """
+        # Before loading the model, set the default dtype for torch
+        torch.set_default_dtype(kwargs["torch_dtype"])
 
-        print(f"Loading Llama model from {model_path} with Hybrid FP8 format assignment")
+        # Load the vanilla model weights
+        vanilla_model = cls(config)
+        subfolder = ""
+        variant = None
+        if os.path.isfile(
+            os.path.join(
+                pretrained_model_name_or_path,
+                subfolder,
+                _add_variant("model.safetensors.index.json", variant),
+            )
+        ):
+            # Load from a sharded PyTorch checkpoint
+            archive_file = os.path.join(
+                pretrained_model_name_or_path,
+                subfolder,
+                _add_variant("model.safetensors.index.json", variant),
+            )
+            is_sharded = True
+        elif os.path.isfile(
+            os.path.join(
+                pretrained_model_name_or_path, subfolder, _add_variant(WEIGHTS_INDEX_NAME, variant)
+            )
+        ):
+            # Load from a sharded PyTorch checkpoint
+            archive_file = os.path.join(
+                pretrained_model_name_or_path, subfolder, _add_variant(WEIGHTS_INDEX_NAME, variant)
+            )
+            is_sharded = True
+        # check model.safetensors file
+        elif os.path.isfile(
+            os.path.join(
+                pretrained_model_name_or_path,
+                subfolder,
+                _add_variant("model.safetensors", variant),
+            )
+        ):
+            # Load from a non-sharded PyTorch checkpoint
+            archive_file = os.path.join(
+                pretrained_model_name_or_path,
+                subfolder,
+                _add_variant("model.safetensors", variant),
+            )
+            is_sharded = False
+        else:
+            raise AssertionError("Only sharded PyTorch ckpt format supported at the moment")
 
-        # Load checkpoint
-        state_dict = load_state_dict(model_path)
+        
 
-        # Rename keys to match TE layer structure
-        renamed_state_dict = {}
-        for name, param in state_dict.items():
-            new_name = cls._rename_key_for_te(name)
-            renamed_state_dict[new_name] = param
+        # If the checkpoint is not sharded, it's a trivial sharding case
+        if not is_sharded:
+            resolved_archive_file = [archive_file]
+            print(f"Resolved archive file: {archive_file}")
+        else:
+            resolved_archive_file, _ = get_checkpoint_shard_files(
+                pretrained_model_name_or_path,
+                archive_file,
+            )
 
-        # Load state dict
-        missing_keys, unexpected_keys = model.load_state_dict(
-            renamed_state_dict, strict=False
-        )
+        for shard_file in resolved_archive_file:
+            state_dict = load_state_dict(shard_file)
+            # replace_params copies parameters relevant only to TransformerEngine
+            replace_params(state_dict, vanilla_model.state_dict(), config)
+            # load_state_dict copies parameters other than those in TransformerEngine
+            vanilla_model.load_state_dict(state_dict, strict=False)
 
-        if missing_keys:
-            print(f"Missing keys when loading: {missing_keys}")
-        if unexpected_keys:
-            print(f"Unexpected keys when loading: {unexpected_keys}")
+            # Force mem release. Taken from huggingface code
+            del state_dict
+            gc.collect()
 
-        print("Model loaded successfully with Hybrid FP8 configuration")
-        print("Format assignment: MLP=E4M3, Attn Q/K=E5M2, Attn V/O=E4M3")
+        return vanilla_model
 
-        return model
 
-    @staticmethod
-    def _rename_key_for_te(key):
-        """Rename Hugging Face checkpoint keys to match TE layer names."""
-        # Map standard attention layer names to our separate projections
-        replacements = [
-            ("self_attn.q_proj", "q_proj"),
-            ("self_attn.k_proj", "k_proj"),
-            ("self_attn.v_proj", "v_proj"),
-            ("self_attn.o_proj", "o_proj"),
-            ("mlp.gate_proj", "layernorm_mlp.fc1_weight"),
-            ("mlp.up_proj", "layernorm_mlp.fc2_weight"),
-            ("mlp.down_proj", "layernorm_mlp.fc3_weight"),
-            ("input_layernorm", "input_layernorm"),
-            ("post_attention_layernorm", "layernorm_mlp.layernorm"),
-        ]
+def replace_params(hf_state_dict, te_state_dict, config):
+    # collect all layer prefixes to update
+    all_layer_prefixes = set()
+    for param_key in hf_state_dict.keys():
+        layer_prefix_pat = "model.layers.\d+."
+        m = re.match(layer_prefix_pat, param_key)
+        if m is not None:
+            all_layer_prefixes.add(m.group())
+    # print(te_state_dict.keys())
+    for layer_prefix in all_layer_prefixes:
+        # When loading weights into models with less number of layers, skip the
+        # copy if the corresponding layer doesn't exist in HF model
+        if layer_prefix + "input_layernorm.weight" in hf_state_dict:
+            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.layer_norm_weight"].data[
+                :
+            ] = hf_state_dict[layer_prefix + "input_layernorm.weight"].data[:]
 
-        for old, new in replacements:
-            if old in key:
-                key = key.replace(old, new)
+        if layer_prefix + "self_attn.q_proj.weight" in hf_state_dict:
+            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.query_weight"].data[:] = (
+                hf_state_dict[layer_prefix + "self_attn.q_proj.weight"].data[:]
+            )
 
-        return key
+        if layer_prefix + "self_attn.k_proj.weight" in hf_state_dict:
+            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.key_weight"].data[:] = (
+                hf_state_dict[layer_prefix + "self_attn.k_proj.weight"].data[:]
+            )
+
+        if layer_prefix + "self_attn.v_proj.weight" in hf_state_dict:
+            te_state_dict[layer_prefix + "self_attention.layernorm_qkv.value_weight"].data[:] = (
+                hf_state_dict[layer_prefix + "self_attn.v_proj.weight"].data[:]
+            )
+
+        if layer_prefix + "self_attn.o_proj.weight" in hf_state_dict:
+            te_state_dict[layer_prefix + "self_attention.proj.weight"].data[:] = hf_state_dict[
+                layer_prefix + "self_attn.o_proj.weight"
+            ].data[:]
+
+        if layer_prefix + "post_attention_layernorm.weight" in hf_state_dict:
+            te_state_dict[layer_prefix + "layernorm_mlp.layer_norm_weight"].data[:] = hf_state_dict[
+                layer_prefix + "post_attention_layernorm.weight"
+            ].data[:]
+
+        # It may happen that gate_proj.weight and up_proj.weight will be in the different files, so we need to
+        # load them separately.
+        if layer_prefix + "mlp.gate_proj.weight" in hf_state_dict:
+            te_state_dict[layer_prefix + "layernorm_mlp.fc1_weight"].data[
+                : config.intermediate_size
+            ] = hf_state_dict[layer_prefix + "mlp.gate_proj.weight"].data
+
+        if layer_prefix + "mlp.up_proj.weight" in hf_state_dict:
+            te_state_dict[layer_prefix + "layernorm_mlp.fc1_weight"].data[
+                config.intermediate_size :
+            ] = hf_state_dict[layer_prefix + "mlp.up_proj.weight"].data
+
+        if layer_prefix + "mlp.down_proj.weight" in hf_state_dict:
+            te_state_dict[layer_prefix + "layernorm_mlp.fc2_weight"].data[:] = hf_state_dict[
+                layer_prefix + "mlp.down_proj.weight"
+            ].data[:]
+    return all_layer_prefixes
