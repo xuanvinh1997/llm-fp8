@@ -142,7 +142,7 @@ class FP8Handler:
             # Use default FP8 settings
             return [TERecipeKwargs()]
 
-        elif config.fp8_scenario == "mxfp8":
+        elif config.fp8_scenario == "mxfp8" or config.fp8_scenario == "hybrid":
             return FP8Handler._create_mxfp8_kwargs(TERecipeKwargs)
 
         else:

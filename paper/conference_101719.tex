@@ -49,7 +49,6 @@ The exponential growth in large language model (LLM) parameter counts and contex
 NVIDIA\'s standardization of two FP8 formats—E4M3 (4-bit exponent, 3-bit mantissa) and E5M2 (5-bit exponent, 2-bit mantissa)—presents a fundamental trade-off between precision and dynamic range. E4M3 provides higher mantissa precision within a limited range, making it suitable for stable, dense computations, while E5M2 offers broader exponent coverage at the cost of mantissa resolution, better suited for operations with wide dynamic ranges \cite{nvidia2022fp8}.
 
 Existing FP8 training approaches predominantly employ uniform format assignment strategies. For instance, DeepSeek-V3 \cite{deepseekv3} applies E4M3 universally across all transformer components, while NVIDIA's MXFP8 implementations \cite{nvidia2024mxfp8} focus on hardware-level optimizations without component-specific format selection. However, our analysis reveals that different transformer components exhibit distinct computational patterns that benefit from different FP8 formats.
-
 This work makes the following contributions:
 
 \begin{enumerate}
@@ -59,7 +58,6 @@ This work makes the following contributions:
 
 \item We provide extensive experimental validation across three model scales (3B, 8B) and comprehensive comparison with existing FP8 approaches, demonstrating consistent improvements in memory efficiency and training throughput.
 
-\item We release an open-source implementation that integrates seamlessly with existing PyTorch workflows and leverages NVIDIA Transformer Engine capabilities.
 \end{enumerate}
 
 \section{Related Work}
