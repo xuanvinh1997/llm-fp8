@@ -1,2 +1,22 @@
-\section{Dataset}
-To train our reasoning model, we compiled a dataset covering many mathematical and logical problems. This dataset includes various problem types such as arithmetic operations, algebraic equations, logical reasoning, and multi-step problem solving to ensure comprehensive coverage of mathematical reasoning capabilities.
+\section{Dataset and Experimental Setup}
+
+\subsection{Training Dataset}
+We use the OpenMathInstruct-2 dataset, a large-scale corpus of mathematical instruction-response pairs designed for training mathematical reasoning capabilities in language models. From this corpus, we select 100K high-quality instruction-response pairs covering diverse mathematical topics including arithmetic, algebra, calculus, and problem-solving strategies.
+
+Each training example consists of a mathematical problem statement and its corresponding solution, tokenized to a maximum sequence length of 512 tokens. This sequence length balances computational efficiency with the context requirements for mathematical reasoning tasks.
+
+\subsection{Model Architectures}
+We evaluate our layer-wise FP8 approach across two model scales from the Llama family:
+
+\textbf{Llama-3.2-3B:} A 3 billion parameter model with 32 transformer layers and 32 attention heads per layer. This scale represents an efficient configuration suitable for research environments while demonstrating the effectiveness of FP8 optimization.
+
+\textbf{Llama-3.1-8B:} An 8 billion parameter model with 32 transformer layers and 32 attention heads per layer. This larger scale allows us to evaluate the scalability of our approach and observe how FP8 benefits evolve with model size.
+
+\subsection{Baseline Comparisons}
+We compare three precision configurations to evaluate our layer-wise FP8 approach:
+
+\begin{enumerate}
+\item \textbf{BF16 Baseline:} Standard mixed-precision training with BF16, serving as the accuracy and performance reference
+\item \textbf{Hybrid FP8:} NVIDIA's Hybrid delayed scaling approach using mixed E4M3/E5M2 formats uniformly across all layers
+\item \textbf{Our Layer-wise FP8:} Our proposed method with E5M2 for attention Q/K projections and E4M3 for MLP and V/O projections
+\end{enumerate}

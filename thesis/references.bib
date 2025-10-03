@@ -1,89 +1,129 @@
-@article{bai2007skeleton,
-  author    = {Xiang Bai and Longin Jan Latecki},
-  title     = {Skeleton Pruning by Contour Partitioning with Discrete Curve Evolution},
-  journal   = {IEEE Transactions on Pattern Analysis and Machine Intelligence},
-  year      = {2007},
-  month     = {April},
-  volume    = {29},
-  number    = {3},
-  pages     = {449-462},
-  doi       = {10.1109/TPAMI.2007.59},
-  source    = {PubMed}
-}
-@article{SHEN2011196,
-title = {Skeleton growing and pruning with bending potential ratio},
-journal = {Pattern Recognition},
-volume = {44},
-number = {2},
-pages = {196-209},
-year = {2011},
-issn = {0031-3203},
-doi = {https://doi.org/10.1016/j.patcog.2010.08.021},
-url = {https://www.sciencedirect.com/science/article/pii/S0031320310004073},
-author = {Wei Shen and Xiang Bai and Rong Hu and Hongyuan Wang and Longin {Jan Latecki}},
-keywords = {Skeleton, Skeleton pruning, Skeleton growing, Bending potential ratio},
-abstract = {We propose a novel significance measure for skeleton pruning, called bending potential ratio (BPR), in which the decision regarding whether a skeletal branch should be pruned or not is based on the context of the boundary segment that corresponds to the branch. By considering this contextual information, we can better evaluate the contribution of the boundary segment to the overall shape, which generally depends on its particular location within the whole contour (i.e., a segment may be considered to be insignificant in one place while it may be considered as a feature elsewhere). The BPR is a measure of the significance of contour segments in such context, and depicts the bending potential of a contour segment. Unlike other significance measures that only contain local shape information, the BPR evaluates both local and global shape information. Thus, it is insensitive to local boundary deformation. In addition, we also present a scheme for skeleton growing, which integrates pruning based on the BPR measurement. Our experiments demonstrate that the skeletons obtained by the proposed algorithm are medially placed and connected. We also demonstrate that shapes reconstructed from these skeletons are very close to the original shapes. Moreover, the BPR measure yields a natural multi-scale skeletal representation.}
-}
-@incollection{blum1967,
-  author    = {H. Blum},
-  title     = {A Transformation for Extracting New Descriptions of Shape},
-  booktitle = {Models for the Perception of Speech and Visual Form},
-  editor    = {W. Wathen-Dunn},
-  publisher = {MIT Press},
-  year      = {1967},
-  pages     = {363-380},
-}
-@misc{fedus2022switchtransformersscalingtrillion,
-      title={Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity}, 
-      author={William Fedus and Barret Zoph and Noam Shazeer},
+% ==== FP8 and Mixed Precision Training ====
+
+@misc{micikevicius2022fp8formatsdeeplearning,
+      title={FP8 Formats for Deep Learning},
+      author={Paulius Micikevicius and Dusan Stosic and Neil Burgess and Marius Cornea and Pradeep Dubey and Richard Grisenthwaite and Sangwon Ha and Alexander Heinecke and Patrick Judd and John Kamalu and Naveen Mellempudi and Stuart Oberman and Mohammad Shoeybi and Michael Siu and Hao Wu},
       year={2022},
-      eprint={2101.03961},
+      eprint={2209.05433},
       archivePrefix={arXiv},
       primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2101.03961}, 
-}
-
-@misc{shazeer2017outrageouslylargeneuralnetworks,
-      title={Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer}, 
-      author={Noam Shazeer and Azalia Mirhoseini and Krzysztof Maziarz and Andy Davis and Quoc Le and Geoffrey Hinton and Jeff Dean},
-      year={2017},
-      eprint={1701.06538},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/1701.06538}, 
-}
-
-@dataset{glaiveai_glaive_function_calling_v2,
-  author = {GlaiveAI},
-  title = {Glaive-Function-Calling-v2},
-  year = {2023}, % You may need to update this based on the actual release year
-  url = {https://huggingface.co/datasets/glaiveai/glaive-function-calling-v2},
-  publisher = {Hugging Face Datasets}
-}
-
-@misc{huggingface2024fp8,
-  author = {Hugging Face},
-  title = {Fine-grained FP8 Quantization},
-  year = {2024},
-  howpublished = {\url{https://huggingface.co/docs/transformers/quantization/finegrained_fp8}},
-  note = {Accessed: March 22, 2025}
+      url={https://arxiv.org/abs/2209.05433},
 }
 
 @misc{nvidia_fp8_primer,
   author       = {NVIDIA},
   title        = {Mixed Precision Training with FP8},
   howpublished = {\url{https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/examples/fp8_primer.html}},
+  year         = {2025},
   note         = {Accessed April 6, 2025},
 }
 
-@inproceedings{Yadav_2019,
-   title={Quick and (not so) Dirty: Unsupervised Selection of Justification Sentences for Multi-hop Question Answering},
-   url={http://dx.doi.org/10.18653/v1/D19-1260},
-   DOI={10.18653/v1/d19-1260},
-   booktitle={Proceedings of the 2019 Conference on Empirical Methods in Natural Language Processing and the 9th International Joint Conference on Natural Language Processing (EMNLP-IJCNLP)},
-   publisher={Association for Computational Linguistics},
-   author={Yadav, Vikas and Bethard, Steven and Surdeanu, Mihai},
-   year={2019} }
+@inproceedings{narang2017mixed,
+      title={Mixed precision training},
+      author={Narang, Sharan and Diamos, Gregory and Sengupta, Shubho and Elsen, Erich},
+      booktitle={International Conference on Learning Representations},
+      year={2018}
+}
+
+@inproceedings{micikevicius2018mixed,
+      title={Mixed precision training},
+      author={Micikevicius, Paulius and Narang, Sharan and Alben, Jonah and Diamos, Gregory and Elsen, Erich and Garcia, David and Ginsburg, Boris and Houston, Michael and Kuchaiev, Oleksii and Venkatesh, Ganesh and Wu, Hao},
+      booktitle={International Conference on Learning Representations},
+      year={2018}
+}
+
+@misc{kalamkar2019study,
+      title={A Study of BFloat16 for Deep Learning Training},
+      author={Dhiraj Kalamkar and Dheevatsa Mudigere and Naveen Mellempudi and Dipankar Das and Kunal Banerjee and Sasikanth Avancha and others},
+      year={2019},
+      eprint={1905.12322},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/1905.12322}
+}
+
+% ==== Quantization Methods ====
+
+@inproceedings{jacob2018quantization,
+      title={Quantization and Training of Neural Networks for Efficient Integer-Arithmetic-Only Inference},
+      author={Jacob, Benoit and Kligys, Skirmantas and Chen, Bo and Zhu, Menglong and Tang, Matthew and Howard, Andrew and Adam, Hartwig and Kalenichenko, Dmitry},
+      booktitle={Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition},
+      pages={2704--2713},
+      year={2018}
+}
+
+@inproceedings{dettmers2022gpt3,
+      title={GPT3.int8(): 8-bit Matrix Multiplication for Transformers at Scale},
+      author={Dettmers, Tim and Lewis, Mike and Belkada, Younes and Zettlemoyer, Luke},
+      booktitle={Advances in Neural Information Processing Systems},
+      volume={35},
+      pages={30318--30332},
+      year={2022}
+}
+
+% ==== Large Language Models ====
+
+@misc{deepseekv3,
+      title={DeepSeek-V3 Technical Report},
+      author={DeepSeek-AI},
+      year={2024},
+      eprint={2412.19437},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2412.19437},
+}
+
+@misc{meta2024llama3.2,
+      title={Llama 3.2: Revolutionizing edge AI and vision with open, customizable models},
+      author={Meta AI},
+      year={2024},
+      month={September},
+      howpublished={\url{https://ai.meta.com/blog/llama-3-2-connect-2024-vision-edge-mobile-devices/}},
+      note={Meta AI Blog, September 25, 2024}
+}
+
+@misc{meta2024llama3.1,
+      title={Introducing Llama 3.1: Our most capable models to date},
+      author={Meta AI},
+      year={2024},
+      month={July},
+      howpublished={\url{https://ai.meta.com/blog/meta-llama-3-1/}},
+      note={Meta AI Blog, July 23, 2024}
+}
+
+% ==== Transformer Architecture ====
+
+@inproceedings{vaswani2017attention,
+      title={Attention is all you need},
+      author={Vaswani, Ashish and Shazeer, Noam and Parmar, Niki and Uszkoreit, Jakob and Jones, Llion and Gomez, Aidan N and Kaiser, {\L}ukasz and Polosukhin, Illia},
+      booktitle={Advances in Neural Information Processing Systems},
+      volume={30},
+      pages={5998--6008},
+      year={2017}
+}
+
+@misc{shazeer2020gluvariantsimprovetransformer,
+      title={GLU Variants Improve Transformer},
+      author={Noam Shazeer},
+      year={2020},
+      eprint={2002.05202},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2002.05202},
+}
+
+% ==== Datasets ====
+
+@misc{toshniwal2024openmath2,
+      title={OpenMathInstruct-2: Accelerating AI for Math with Massive Open-Source Instruction Data},
+      author={Shubham Toshniwal and Wei Du and Ivan Moshkov and Branislav Kisacanin and Alexan Ayrapetyan and Igor Gitman},
+      year={2024},
+      eprint={2410.01560},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2410.01560},
+}
+
 @article{clark2018think,
   title={Think you have solved question answering? try arc, the ai2 reasoning challenge},
   author={Clark, Peter and Cowhey, Isaac and Etzioni, Oren and Khot, Tushar and Sabharwal, Ashish and Schoenick, Carissa and Tafjord, Oyvind},
@@ -122,6 +162,16 @@ abstract = {We propose a novel significance measure for skeleton pruning, called
   note={Introduces the Minerva model and its evaluation, often performed on math datasets like GSM8K or MATH. The specific "Minerva Math" benchmark likely refers to the evaluation setup or a specific dataset used/curated in this context.}
 }
 
+% ==== Tools and Frameworks ====
+
+@misc{transformer_engine,
+    title = {Transformer Engine},
+    author = {NVIDIA},
+    year = {2025},
+    howpublished = {\url{https://github.com/NVIDIA/TransformerEngine}},
+    note = {NVIDIA Deep Learning Documentation}
+}
+
 @misc{huggingface,
   author =       {Wolf, Thomas and Debut, Lysandre and Sanh, Victor and Chaumond, Julien and Delangue, Clement and Moi, Anthony and Cistac, Pierric and Rault, Tim and Louf, R{\'e}mi and Funtowicz, Morgan and Davison, Joe and Shleifer, Sam and von Platen, Patrick and Ma, Clara and Jernite, Yacine and Plu, Julien and Xu, Canwen and Le Scao, Teven and Barham, Stephen and Hutchison, Alexander M. and Pickering, Quentin and Biderman, Stella and Gao, Leo and Townsend, Sean and Matrosov, Anton and Drame, Mariama and Lhoest, Quentin and Sutantar, Nathan and Lambert, Sylvain},
   title =        {Transformers: State-of-the-art Natural Language Processing},
@@ -129,19 +179,32 @@ abstract = {We propose a novel significance measure for skeleton pruning, called
   howpublished = {\url{https://github.com/huggingface/transformers}},
 }
 
-
-@misc{transformer_engine,
-    title = {Transformer Engine},
-    author = {NVIDIA},
-    howpublished = {\url{https://github.com/NVIDIA/TransformerEngine}},
+@misc{huggingface2024fp8,
+  author = {Hugging Face},
+  title = {Fine-grained FP8 Quantization},
+  year = {2024},
+  howpublished = {\url{https://huggingface.co/docs/transformers/quantization/finegrained_fp8}},
+  note = {Accessed: March 22, 2025}
 }
 
-@misc{shazeer2020gluvariantsimprovetransformer,
-      title={GLU Variants Improve Transformer}, 
-      author={Noam Shazeer},
-      year={2020},
-      eprint={2002.05202},
+% ==== Mixture of Experts ====
+
+@misc{fedus2022switchtransformersscalingtrillion,
+      title={Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity},
+      author={William Fedus and Barret Zoph and Noam Shazeer},
+      year={2022},
+      eprint={2101.03961},
       archivePrefix={arXiv},
       primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2002.05202}, 
+      url={https://arxiv.org/abs/2101.03961},
+}
+
+@misc{shazeer2017outrageouslylargeneuralnetworks,
+      title={Outrageously Large Neural Networks: The Sparsely-Gated Mixture-of-Experts Layer},
+      author={Noam Shazeer and Azalia Mirhoseini and Krzysztof Maziarz and Andy Davis and Quoc Le and Geoffrey Hinton and Jeff Dean},
+      year={2017},
+      eprint={1701.06538},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/1701.06538},
 }

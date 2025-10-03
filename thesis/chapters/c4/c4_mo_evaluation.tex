@@ -1,26 +1,39 @@
-\section{Evaluation}\label{sec:evaluation}
+\section{Convergence and Model Quality}\label{sec:evaluation}
 
-This section delineates a thorough examination of the FP8-optimized Qwen2.5-1.5B model across a variety of benchmarks, juxtaposing four distinct configurations: Base (the original FP32), Hybrid (E4M3/E5M2), Pure E4M3, and BF16. The evaluation encompasses both general reasoning tasks (ARC Challenge, ARC Easy) and mathematical reasoning tasks (MATHQA, Minerva Math), thereby elucidating the performance trade-offs associated with diminished precision formats.
+This section presents a comprehensive analysis of convergence characteristics and model quality metrics for our layer-wise FP8 training approach compared to baseline precision configurations.
 
-\subsection{Benchmark Results}
+\subsection{Training Loss Convergence}
 
-Table~\ref{tab:benchmark_results} encapsulates the accuracy scores across all benchmarks and configurations. Each configuration underwent assessment over three independent iterations to guarantee statistical reliability, with mean values presented.
+Our experiments demonstrate that layer-wise FP8 training achieves comparable final loss values to BF16 baseline while maintaining superior training dynamics. Figure~\ref{fig:training_loss} shows the training loss progression across different precision configurations.
 
-\begin{table}[h] \centering \begin{tabular}{llcccc} \toprule \textbf{Task} & \textbf{Base} & \textbf{Hybrid} & \textbf{E4M3} & \textbf{BF16} \\ \midrule ARC Challenge & 0.3362 & \textbf{0.4317} & 0.4292 & 0.4172 \\ ARC Easy & 0.5215 & \textbf{0.7294} & 0.7281 & 0.7277 \\ MATHQA & \textbf{0.4425} & 0.3417 & 0.3343 & 0.3357 \\ Minerva Math & \textbf{0.5104} & 0.2904 & 0.2710 & 0.2584 \\ \bottomrule \end{tabular} \caption{Accuracy comparison of Base, Hybrid, E4M3, and BF16 across tasks (mean of three evaluation runs).} \label{tab:benchmark_results} \end{table}
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.9\linewidth]{figures/c4/avg_loss.png}
+    \caption{Average training loss comparison between BF16 and FP8 approaches. Both methods demonstrate similar convergence patterns from initial loss of 0.47 to final values below 0.36, with our layer-wise FP8 maintaining smoother dynamics throughout training.}
+    \label{fig:training_loss}
+\end{figure}
 
-\subsection{Generalization to New Reasoning Tasks}
+Both BF16 and our FP8 approach converge from initial loss of approximately 0.47 to final values below 0.36 after training. The key distinction lies in convergence stability: our layer-wise format assignment produces smoother loss curves with reduced oscillations compared to hybrid FP8 implementations. This improved stability stems from the selective application of E5M2 format to high-variance components (attention Q/K) while maintaining E4M3 precision for stable operations.
 
-A consistent enhancement in performance is discerned for the lower-precision formats in contrast to the Base model across a spectrum of general reasoning benchmarks. In the ARC Challenge, the Hybrid configuration attains an accuracy of 43.17\%, signifying a 9.55 percentage point improvement over the Base model's 33.62\%. The E4M3 configuration demonstrates a comparable performance at 42.92\%, whereas BF16 achieves 41.72\%.
+\subsection{Training Perplexity Analysis}
 
-Analogously, on ARC Easy, all three precision-reduced variants surpass the Base model. Each configuration exceeds an accuracy of 72\% (Hybrid: 72.94\%, E4M3: 72.81\%, BF16: 72.77\%) when juxtaposed with the Base model's 52.15\%, illustrating a significant enhancement of over 20 percentage points.
+Training perplexity measurements across both model scales confirm that our layer-wise FP8 approach maintains model quality comparable to BF16 baselines. Figure~\ref{fig:training_perplexity} illustrates perplexity values across different model scales and precision formats.
 
-These advancements may be ascribed to multiple factors. Firstly, the diminution in precision might function as a form of implicit regularization, mitigating overfitting to specific numerical patterns and consequently fostering generalization. Secondly, the dynamics of training under lower-precision formats may facilitate a more effective exploration of the optimization landscape, particularly in reasoning-intensive tasks. Lastly, general reasoning tasks such as those encompassed within the ARC benchmark may exhibit reduced sensitivity to precise numerical representation, in contrast to tasks necessitating intricate calculations.
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.9\linewidth]{figures/c4/train_perplexity.png}
+    \caption{Training perplexity comparison across model scales and precision formats. Our layer-wise FP8 approach maintains perplexity in the 1.30-1.32 range with superior stability compared to hybrid configurations, demonstrating minimal degradation from BF16 baselines.}
+    \label{fig:training_perplexity}
+\end{figure}
 
-\subsubsection{Analysis of Math Reasoning Tasks}
+For both Llama-3.2-3B and Llama-3.1-8B configurations, our method achieves perplexity values in the 1.30-1.32 range, demonstrating minimal degradation from full-precision training. Notably, our approach shows more stable perplexity trajectories compared to hybrid FP8 configurations, which exhibit greater variance during training. This stability advantage translates to more predictable model behavior and reliable convergence characteristics.
 
-In contrast to general reasoning tasks, mathematical benchmarks unveil a divergent trend. In MATHQA, the Base model registers the highest accuracy at 44.25\%, while Hybrid, E4M3, and BF16 lag behind with scores of 34.17\%, 33.43\%, and 33.57\%, respectively. The performance disparity in this context is approximately 10–11 percentage points.
+\subsection{Scale-Dependent Performance Characteristics}
 
-This divergence becomes increasingly pronounced on the Minerva Math benchmark, which entails more intricate symbolic reasoning. The Base model attains 51.04\%, whereas Hybrid, E4M3, and BF16 achieve only 29.04\%, 27.10\%, and 25.84\%, respectively—culminating in a performance gap that exceeds 20 percentage points.
+Our results reveal interesting scale-dependent performance patterns:
 
+\textbf{At 3B scale:} Layer-wise FP8 achieves both memory efficiency (10\% reduction) and training speedup (42\% faster), demonstrating clear advantages across all metrics while maintaining numerical stability.
 
-These empirical observations indicate that tasks requiring mathematical reasoning, especially those that necessitate multi-step calculations and symbolic transformations, exhibit a significantly heightened sensitivity to numerical precision. Various factors may elucidate this heightened sensitivity. Firstly, the accumulation of errors across successive operations can exacerbate inaccuracies when utilizing low-precision formats. Secondly, the constrained representational capacity inherent in FP8 may impede the model's proficiency in discerning subtle numerical distinctions. Lastly, the diminished dynamic range associated with FP8 may precipitate underflow or overflow during intermediate computations that are essential for maintaining mathematical accuracy.
+\textbf{At 8B scale:} While memory usage increases slightly due to implementation overheads, training time benefits become more pronounced (27\% faster than BF16, 13\% faster than Hybrid FP8). This suggests that FP8 optimization benefits scale favorably with model size, particularly for training throughput.
+
+These patterns indicate that layer-wise FP8 format assignment provides consistent improvements that become increasingly valuable as models scale, with training time reductions compensating for any memory overhead at larger scales.

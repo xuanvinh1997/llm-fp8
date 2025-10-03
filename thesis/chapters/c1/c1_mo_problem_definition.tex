@@ -1,16 +1,17 @@
 \section{Motivation}\label{sec:motivation}
 
-Why are LLMs hard to deploy on edge devices? The fundamental issue is scale. Modern Transformer-based LLMs achieve higher accuracy primarily by scaling up parameter counts and training data. This leads to massive models that strain memory and compute resources. In general, deploying an LLM requires loading all its weights into memory (GPU VRAM or RAM) and performing billions of math operations per inference. Edge devices, however, are constrained in memory (often a few GB) and lack the specialized matrix acceleration of large data-center GPUs.
+The fundamental challenge in training large language models lies in the computational and memory costs associated with scaling to billions of parameters. Modern transformer-based LLMs achieve higher accuracy primarily by scaling up parameter counts and training data, but this leads to massive resource requirements that strain even data-center GPU capabilities. Training a multi-billion parameter model requires not only loading all weights into GPU memory but also maintaining activations, gradients, and optimizer states throughout the training process.
 
-\subsection{Qwen2.5-1.5B and Efficient Small-Scale LLMs}
-Powerful open-source models such as \textbf{Qwen 2.5} deliver impressive general-purpose performance, yet their accuracy deteriorates once the task domain narrows to highly structured mathematics.  Bridging that gap ordinarily requires full-parameter fine-tuning, a process that is both memory-hungry and compute-intensive for billion-parameter networks.  As a result, research laboratories and edge-computing practitioners alike face prohibitive costs when attempting to adapt state-of-the-art language models to specialized workloads.
+\subsection{The Challenge of FP8 Format Selection}
 
-Our objective is therefore two-fold: \emph{(i)} preserve the strong reasoning capabilities of Qwen 2.5 on domain-specific maths tasks, and \emph{(ii)} compress the computational footprint so the refined model can run on modest hardware budgets.  Recent accelerator generations provide two complementary avenues for achieving this goal.
+NVIDIA's standardization of two FP8 formats presents both opportunities and challenges. E4M3 provides higher mantissa precision within a limited range, making it suitable for stable, dense computations. Conversely, E5M2 offers broader exponent coverage at the cost of mantissa resolution, better suited for operations with wide dynamic ranges.
 
-\textbf{FP8 training.}  
-NVIDIA Hopper- and AMD CDNA3-class GPUs expose native 8-bit floating-point (FP8) tensor cores.  Training directly in FP8 slashes memory consumption by up to 75 \% relative to FP32 while simultaneously boosting arithmetic throughput, enabling us to iterate on large models without resorting to multi-node clusters.
+Existing FP8 training approaches face a critical limitation: they predominantly employ uniform format assignment strategies. For instance, recent implementations apply E4M3 universally across all transformer components. However, our analysis reveals that different transformer components exhibit distinct computational patterns:
 
-\textbf{FP8 post-training quantization.}  
-Once fine-tuning converges, we further compress the model by converting all weight tensors from FP16/BF16 to FP8.  This step multiplies the capacity of a given GPU by roughly two, shortens inference latency, and lowers energy draw—without incurring a noticeable loss in perplexity or downstream accuracy.
+\textbf{MLP Stability.} Feed-forward (MLP) layers exhibit concentrated activation and gradient distributions, largely confined within moderate ranges. Their dense matrix multiplications evolve smoothly during training, benefiting from the higher mantissa precision of E4M3.
 
-By combining FP8-aware optimization with post-training quantization, the project demonstrates that \textsc{Qwen 2.5-1.5B} can retain its mathematical reasoning prowess while fitting within the memory envelope of a single H100 NVL or even smaller edge devices, thereby widening access to high-quality, domain-tuned language models.
+\textbf{Attention Variability.} Self-attention layers display wider dynamic ranges, especially in query-key interactions. The softmax operation amplifies scale sensitivity, and attention weights often span several orders of magnitude, motivating the use of E5M2's extended exponent range.
+
+\textbf{Gradient Amplification.} Backpropagation through attention further increases gradient variance, particularly in query and key projections. The chain rule propagation multiplies scaling factors, producing distributions broader than those in MLP layers, requiring sufficient exponent headroom.
+
+Our objective is therefore to design a systematic layer-wise FP8 format assignment strategy that: \emph{(i)} leverages the complementary strengths of E4M3 and E5M2 formats, \emph{(ii)} assigns formats based on component-specific computational patterns, and \emph{(iii)} achieves superior memory efficiency, training throughput, and numerical stability compared to uniform format approaches.

@@ -1,8 +1,8 @@
 % ---------- Training with FP8 ----------
-\section{Training with \texorpdfstring{FP8}{FP8}}
+\section{Layer-Wise FP8 Training Methodology}
 
-\subsection{Hardware}
-All experiments were executed on a single \textbf{NVIDIA H100 NVL} equipped with 94 GB of HBM3. Its fourth-generation Tensor Cores expose native FP8 arithmetic, which we access through the NVIDIA Transformer Engine (TE) library\cite{transformer_engine}.
+\subsection{Hardware Platform}
+All experiments were executed on NVIDIA Blackwell architecture GPUs with 96 GB of memory, leveraging advanced FP8 Tensor Core capabilities. The hardware provides native support for both E4M3 and E5M2 formats, which we access through the NVIDIA Transformer Engine (TE) library\cite{transformer_engine}.
 
 \subsection{Training Configuration}
 \vspace{-0.5em}
@@ -10,39 +10,79 @@ All experiments were executed on a single \textbf{NVIDIA H100 NVL} equipped with
     \centering\small
     \begin{tabular}{lcc}
         \toprule
-        \textbf{Hyper-parameter} & \textbf{FP8/BF16 run} & \textbf{FP32 baseline}\\
+        \textbf{Configuration} & \textbf{Llama-3.2-3B} & \textbf{Llama-3.1-8B} \\
         \midrule
-        Training examples                & 260 K & 260 K\\
-        Epochs                           & 3     & 3\\
-        Batch size per device            & 26    & 12\\
-        Maximum sequence length          & 512   & 512\\
-        Gradient-accumulation steps      & 4     & 4\\
+        Batch Size (BF16) & 24 & 6 \\
+        Batch Size (FP8) & 24 & 6 \\
+        Sequence Length & 512 & 512 \\
+        Learning Rate & 1e-5 & 1e-5 \\
+        Epochs & 3 & 3 \\
+        Training Samples & 100K & 100K \\
+        Optimizer & AdamW & AdamW \\
+        Gradient Accumulation & 4 & 4 \\
         \bottomrule
     \end{tabular}
-    \caption{Key hyper-parameters for training the 1.5 B-parameter model.}
+    \caption{Training configuration across model scales.}
     \label{tab:fp8_config}
 \end{table}
 
-\subsection{Converting the Pre-trained Model to Transformer Engine Layers}
-The publicly available \texttt{qwen2.5} checkpoint from Hugging Face is rewritten by substituting every \texttt{nn.Linear}, \texttt{LayerNorm}, and \texttt{RMSNorm} module with its TE analog. Figure~\ref{fig:te_conversion} sketches this one-to-one mapping, which preserves the original parameter tensors while enabling FP8 kernels.
+\subsection{Converting Pre-trained Models to Transformer Engine}
+We convert Llama model checkpoints from Hugging Face by replacing the standard \texttt{LlamaDecoderLayer} with a custom \texttt{TELlamaDecoderLayer} that uses Transformer Engine components. The conversion is performed using a context manager that temporarily patches the Llama architecture:
 
-\begin{figure}[h]
-    \centering
-    \includegraphics[width=\linewidth]{figures/c3/conversation.drawio.png}
-    \caption{Mapping PyTorch layers to NVIDIA Transformer Engine layers.}
-    \label{fig:te_conversion}
-\end{figure}
+\begin{verbatim}
+@contextmanager
+def replace_decoder(te_decoder_cls):
+    original_cls = transformers.models.llama.modeling_llama.LlamaDecoderLayer
+    transformers.models.llama.modeling_llama.LlamaDecoderLayer = te_decoder_cls
+    try:
+        yield
+    finally:
+        transformers.models.llama.modeling_llama.LlamaDecoderLayer = original_cls
+\end{verbatim}
 
-\subsection{Precision Recipes}\label{sec:precision_recipes}
-We train the model with 3 types of recipes:
-\textbf{Hybrid (E4M3/E5M2).}
-Weights and forward activations are stored in the \textbf{E4M3} format, whereas gradient buffers use \textbf{E5M2}. The optimizer retains a full-precision (FP32) copy of the weights.
+The \texttt{TELlamaDecoderLayer} replaces standard PyTorch layers with Transformer Engine equivalents:
 
-\textbf{Pure E4M3.}
-Both weights and forward activations and all gradient buffers reside in \textbf{E4M3}. The optimizer again maintains FP32 master weights to guarantee numerical stability.
+\begin{verbatim}
+class TELlamaDecoderLayer(torch.nn.Module):
+    def __init__(self, config, *args, **kwargs):
+        super().__init__()
+        # Replace attention with TE MultiheadAttention
+        self.self_attention = te.pytorch.MultiheadAttention(
+            hidden_size=config.hidden_size,
+            num_attention_heads=config.num_attention_heads,
+            num_gqa_groups=config.num_key_value_heads,
+            normalization="RMSNorm",
+            ...
+        )
+        # Replace MLP with TE LayerNormMLP
+        self.layernorm_mlp = te.pytorch.LayerNormMLP(
+            hidden_size=config.hidden_size,
+            ffn_hidden_size=config.intermediate_size,
+            normalization="RMSNorm",
+            activation="swiglu"
+        )
+\end{verbatim}
 
-\textbf{BF16 Baseline.}
-For comparison, we train a BF16 model in which weights, activations, and gradients remain in \textbf{BF16}; only the optimizer state is kept in FP32.
+This approach preserves the original model weights while enabling layer-wise FP8 format control through Transformer Engine's specialized modules.
+
+\subsection{Layer-Wise Format Assignment Implementation}\label{sec:precision_recipes}
+
+Our layer-wise FP8 approach assigns formats based on component type, compared against two baselines:
+
+\textbf{BF16 Baseline:}
+Standard mixed-precision training where weights, activations, and gradients remain in BF16, with FP32 optimizer states. This serves as our accuracy and performance reference.
+
+\textbf{Hybrid FP8:}
+NVIDIA's uniform delayed scaling approach where weights and forward activations use E4M3 format, while gradient buffers use E5M2, applied uniformly across all layers. The optimizer maintains FP32 master weights.
+
+\textbf{Our Layer-wise FP8:}
+Selective format assignment based on component characteristics:
+\begin{itemize}
+\item \textbf{MLP layers:} All weights, activations, and gradients use E4M3 for stable, high-precision computation
+\item \textbf{Attention Q/K projections:} Use E5M2 for extended dynamic range in query-key operations
+\item \textbf{Attention V/O projections:} Use E4M3 for precision in value and output computations
+\end{itemize}
+The optimizer maintains FP32 master weights across all configurations to ensure numerical stability.
 
 \subsection{Dynamic Scaling Mechanism}
 To maintain numerical stability during FP8 training, we implement a dynamic scaling mechanism that adapts to the numerical range of tensors. This is critical because the limited range of FP8 would otherwise lead to frequent overflow or underflow.
@@ -96,24 +136,40 @@ Several techniques were employed to maintain numerical stability with FP8:
     \item \textbf{FP32 master weights}: The optimizer maintains a full-precision copy of weights to accumulate small gradient updates that would be lost in lower precision.
 \end{itemize}
 
-\subsection{Transformer Engine Configuration}
+\subsection{Layer-Wise FP8 Recipe Configuration}
 
-We configure the Transformer Engine with the following settings to optimize for the Qwen2.5 architecture:
+We configure different FP8 recipes for attention and MLP layers based on our layer-wise format assignment strategy. The implementation uses Transformer Engine's DelayedScaling mechanism with format-specific configurations:
 
 \begin{verbatim}
-transformer_engine.common.recipe.DelayedScaling(
-    fp8_format=transformer_engine.common.recipe.Format.HYBRID,
-    amax_history_len=128,
-    amax_compute_algo="max",
-    scaling_factor_compute_algo="combined",
-    scaling_factor_rounding="nearest",
-    fp8_margin=0.95,
-    amax_forward_update_margin=1.3,
-    amax_backward_update_margin=1.1,
-    scaling_factor_update_margin=0.9,
+from transformer_engine.common.recipe import Format, DelayedScaling
+
+# Attention layers: Use HYBRID format (E4M3/E5M2)
+attn_recipe = DelayedScaling(
+    fp8_format=Format.HYBRID,
+    amax_history_len=16,
+    amax_compute_algo="max"
+)
+
+# MLP layers: Use E4M3 format exclusively
+mlp_recipe = DelayedScaling(
+    fp8_format=Format.E4M3,
+    amax_history_len=16,
+    amax_compute_algo="max"
 )
 \end{verbatim}
 
-This configuration balances numerical stability with computational efficiency, allowing the model to maintain accuracy while benefiting from FP8's performance advantages.
+During the forward pass, we apply format-specific recipes to each component:
+
+\begin{verbatim}
+# Attention with HYBRID format (E5M2 for Q/K)
+with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=attn_recipe):
+    attn_out = self.self_attention(hidden_states, ...)
+
+# MLP with E4M3 format
+with te.pytorch.fp8_autocast(enabled=True, fp8_recipe=mlp_recipe):
+    ffn_out = self.layernorm_mlp(hidden_states)
+\end{verbatim}
+
+This configuration assigns HYBRID format to attention operations (allowing E5M2 for query-key projections with extended dynamic range) while MLP layers exclusively use E4M3 for stable, high-precision computation.
 
 % ---------- End of section ----------

@@ -1,9 +1,9 @@
 \chapter{Introduction}
-Large Language Models (LLMs) have achieved remarkable capabilities across a range of tasks, from natural language understanding to complex reasoning. However, this prowess comes with steep resource demands.
+Large Language Models (LLMs) have achieved remarkable capabilities across a range of tasks, from natural language understanding to complex reasoning. However, this prowess comes with steep resource demands that pose significant challenges for both training and deployment.
 
-State-of-the-art models often consist of billions of parameters, requiring huge memory and computational power for inference and training. For example, a 70B-parameter model like LLaMA-2 (70B) occupies around 140 GB in full precision, exceeding the RAM of typical edge devices. 
+The exponential growth in large language model parameter counts and context lengths has created unprecedented computational and memory demands. State-of-the-art models often consist of billions of parameters, requiring substantial memory and computational power for training and inference. Traditional mixed-precision approaches using FP16 and BF16 formats, while effective, still impose significant memory overhead that limits model scalability and training throughput. For instance, training a 3 billion parameter model with BF16 precision requires over 82 GB of GPU memory, while an 8 billion parameter model demands similar or higher memory allocation.
 
-Running such models on edge devices (smartphones, laptops, embedded systems) is challenging or infeasible without compression, as insufficient memory leads to slow performance or crashes. This limitation prevents many real-world use cases and restricts access to advanced AI on ubiquitous devices.
+The introduction of 8-bit floating-point (FP8) formats offers the potential to halve memory requirements while maintaining numerical stability, but current implementations face challenges in optimally leveraging the distinct characteristics of available FP8 variants. NVIDIA's standardization of two FP8 formats—E4M3 (4-bit exponent, 3-bit mantissa) and E5M2 (5-bit exponent, 2-bit mantissa)—presents a fundamental trade-off between precision and dynamic range. Existing FP8 training approaches predominantly employ uniform format assignment strategies, but our analysis reveals that different transformer components exhibit distinct computational patterns that benefit from different FP8 formats.
 
 \input{chapters/c1/c1_mo_overview}
 \input{chapters/c1/c1_mo_problem_definition}

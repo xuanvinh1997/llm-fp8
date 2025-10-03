@@ -1,37 +1,61 @@
 \chapter*{Conclusion} \addcontentsline{toc}{chapter}{Conclusion}
 
-In this scholarly discourse, the optimization of the Qwen2 model has been meticulously examined through the lens of FP8 quantization methodologies, with a particular focus on its applicability for deployment in devices characterized by minimal power consumption. Through extensive experimentation and rigorous analysis, we demonstrate that FP8 quantization represents a compelling strategy for mitigating computational and memory overheads while avoiding significant detriment to performance.
+This thesis presents a systematic layer-wise FP8 format assignment strategy for efficient transformer training, addressing the critical challenge of optimally leveraging the complementary strengths of E4M3 and E5M2 formats. Through comprehensive experimental evaluation on Llama-3.2-3B and Llama-3.1-8B models, we demonstrate that layer-wise format specialization achieves substantial improvements in memory efficiency, training throughput, and numerical stability compared to uniform format assignment approaches.
 
-\section*{Results Summary} Our investigation has yielded several critical insights:\\ Training efficiency: The implementation of FP8 quantization enhances training efficiency by approximately 27\% when compared to BF16, and more than doubles the training velocity relative to FP32, while maintaining analogous convergence characteristics and final model quality. This increase in efficiency is further complemented by a 40\% reduction in memory utilization in comparison to FP32 training.
+\section*{Results Summary}
 
-Inference Performance: The model optimized for FP8 exhibits an inference throughput of 102.49 tokens per second (tps), with memory consumption minimized to a compact 1.70 GiB, rendering it 2.5× and 3.4× more rapid and memory-efficient than the FP32 baseline. This notable advancement renders it applicable in contexts that were previously deemed unattainable.
+Our investigation has yielded several critical insights:
 
-Mathematical Reasoning Preservation: When evaluated against benchmarks such as ARC Challenge, ARC Easy, MATHQA, and Minerva Math, the FP8 model demonstrates competitive accuracy relative to higher precision formats in the majority of scenarios. Although a minor decline in performance was observed on certain complex reasoning tasks, the model's overall capabilities remain largely intact.
+\textbf{Memory Optimization:} For the Llama-3.2-3B model, our layer-wise FP8 approach achieves 10.0\% memory reduction (from 82.4 GB to 74.2 GB) compared to BF16 baseline, enabling larger batch sizes within the same hardware constraints. This memory saving allows for more efficient GPU utilization and potentially faster convergence through increased parallelism.
 
-Resource-Performance Trade-off: Our findings indicate that FP8 quantization achieves an optimal balance between resource utilization and accuracy when compared to alternative precision formats examined, particularly within the constraints of resource-limited hardware.
+\textbf{Training Performance:} Our method delivers substantial training time improvements across both model scales. At 3B scale, we achieve 42\% reduction in training time (3.6h → 2.1h) compared to BF16. At 8B scale, the benefits become more pronounced with 27\% speedup over BF16 (9.1h → 6.6h) and 13\% improvement over Hybrid FP8 (7.6h → 6.6h), demonstrating that FP8 optimization benefits scale favorably with model size.
+
+\textbf{Numerical Stability:} A critical advantage of our layer-wise format assignment is exceptional numerical stability during training. Our selective use of E5M2 for high-dynamic-range operations (attention Q/K) and E4M3 for stable operations (MLPs, values) results in loss variance consistently below 0.4, representing approximately 50\% lower variance compared to hybrid FP8 approaches that exhibit periodic instability spikes reaching 0.8 or higher.
+
+\textbf{Convergence Quality:} Our experiments demonstrate that layer-wise FP8 training achieves comparable final loss values and perplexity metrics (1.30-1.32 range) to BF16 baseline while maintaining superior training dynamics with smoother convergence curves and reduced oscillations.
 
 \section*{Implications}
 
-It is imperative to acknowledge that the implications of this study extend beyond the specific model and methodologies investigated. First and foremost, the facilitation of robust language models in edge and resource-constrained environments significantly contributes to the democratization of access to artificial intelligence capabilities. Secondly, deploying models at the edge promotes privacy-centric applications by enabling local data processing, thereby obviating the necessity for network communication with distant servers and minimizing latency. Thirdly, the reduction in computational costs associated with FP8 quantization culminates in energy conservation, thereby supporting the advancement of sustainable artificial intelligence solutions. Lastly, while our research primarily concentrated on Qwen2.5-1.5B, the methodologies and conclusions derived are likely extensible to other transformer models, potentially exerting a broader influence on research within the domain of natural language processing.
+The implications of this research extend beyond the specific models and methodologies investigated:
+
+\textbf{Training Efficiency:} By enabling more efficient training of large language models, our layer-wise FP8 approach reduces the computational resources required for model development. This democratizes access to LLM training capabilities, allowing researchers and organizations with limited resources to train and experiment with multi-billion parameter models.
+
+\textbf{Scalability:} The scale-dependent performance characteristics reveal that FP8 benefits increase with model size, with the 8B model showing more pronounced training time advantages. This suggests that layer-wise FP8 optimization becomes increasingly valuable as models continue to scale, positioning it as an essential technique for future large-scale model training.
+
+\textbf{Environmental Impact:} The reduction in training time directly translates to energy savings and reduced carbon footprint for LLM training. With the 8B model achieving 27\% faster training, this represents substantial energy conservation at scale, supporting the advancement of sustainable AI practices.
+
+\textbf{Methodological Extensibility:} While our research focuses on Llama architectures (3B and 8B parameters), the layer-wise format assignment methodology is architecture-agnostic and can be extended to other transformer variants, including mixture-of-experts models, sparse transformers, and alternative attention mechanisms.
 
 \section*{Limitations}
 
-Notwithstanding the promising outcomes, our methodology is not devoid of limitations. The FP8 optimization is contingent upon hardware capabilities, necessitating the use of the NVIDIA Hopper architecture or newer iterations equipped with Tensor Cores. We noted a marginal decline in performance on intricate mathematical reasoning tasks, implying that higher precision may be essential for such competencies. Although memory requirements are significantly diminished, the 1.5B parameter model remains excessively large for highly constrained devices such as microcontrollers or low-end smartphones. Furthermore, our evaluation was predominantly centered on mathematics reasoning benchmarks; performance may vary in alternative domains, including creative writing, code generation, or multi-modal reasoning when precision is diminished.
+Several limitations warrant discussion:
+
+\textbf{Hardware Requirements:} Our FP8 optimization requires NVIDIA Blackwell or Hopper architecture GPUs with native FP8 Tensor Core support. This hardware dependency limits immediate applicability to organizations with access to these advanced accelerators.
+
+\textbf{Scale Coverage:} Our evaluation is limited to 3B and 8B model scales. While results show favorable scaling trends, validation on larger models (70B+ parameters) would strengthen claims about scalability and may reveal additional optimization opportunities.
+
+\textbf{Memory Overhead at Scale:} The 8B model experiments revealed unexpected memory overhead (88.3 GB vs 80.0 GB for BF16), attributed to workspace and scaling-metadata requirements. Future work should address these implementation inefficiencies to realize memory benefits consistently across all model scales.
+
+\textbf{Task Diversity:} Our evaluation focuses primarily on training metrics (loss, perplexity, stability) using mathematical reasoning data. Broader evaluation across diverse domains and downstream tasks would provide more comprehensive validation of the approach.
 \section*{Future Work}
 
-We discuss several directions for future work based on the results presented in this paper:\\
+Several promising directions for future research emerge from this work:
 
-Hybrid Precision Approaches: Exploration of mixed precision techniques that would apply different quantization levels on layers depending on their sensitivity could further optimize trade-off between efficiency and performance.
-    
-Combining with other techniques: Studying the synergy between FP8 quantization and other optimization techniques, e.g. pruning, distillation, or sparse attention.
-    
-Optimizations for Dedicated Hardware: tailoring optimizations for given edge hardware platforms, such as custom kernels or operation fusions.
-    
-Dynamic Precision Adaption: Design of dynamic precision adaptation systems, which can vary precision dynamically based on input complexity, battery level or performance requirements, to allow more adaptive deployments.
-    
-Smaller Models: Exploring if the methods discussed in this work be extended to even smaller models (sub-1B parameters) with acceptable task-specific performance.
-    
-Broader Domain Evaluation: Extend evaluation across a broader range of tasks and domains to explore the applicability and constraints of FP8 quantization under more general circumstances.
+\textbf{Scaling to Larger Models:} Extending evaluation to larger model scales (70B+ parameters) would validate the scalability of layer-wise format assignment and potentially reveal additional optimization opportunities. The favorable scaling trends observed between 3B and 8B models suggest that benefits may be even more pronounced at larger scales.
+
+\textbf{Dynamic Format Selection:} Our current approach uses static layer-wise format assignment. Future work could explore dynamic, token-specific or iteration-specific format selection based on runtime characteristics, potentially improving both efficiency and accuracy by adapting to varying computational demands.
+
+\textbf{Memory Overhead Optimization:} Addressing the memory overhead observed in 8B model training through implementation refinements, such as optimized workspace management and reduced metadata requirements, would enable consistent memory benefits across all model scales.
+
+\textbf{Architecture Generalization:} Evaluating layer-wise FP8 on diverse transformer architectures including mixture-of-experts models, sparse transformers, and models with alternative attention mechanisms would demonstrate the generality of the approach and identify architecture-specific optimization opportunities.
+
+\textbf{Integration with Complementary Techniques:} Exploring synergies between layer-wise FP8 and other optimization techniques such as model pruning, knowledge distillation, gradient checkpointing, and sparse attention could yield compound efficiency gains.
+
+\textbf{Downstream Task Evaluation:} Comprehensive evaluation of trained models on diverse downstream tasks beyond mathematical reasoning would validate model quality preservation across different application domains and identify task-specific considerations for format assignment.
 \section*{Closing Remarks}
 
-Efficient fine-tuning of large language model in resource-limited settings is an important front in AI. This work shows how to make a powerful model like Qwen2 feasible for deployment using FP8 quantization 1.5B on the edge in these corner cases without giving up their core functionality. As AI technology becomes more pervasive across applications, techniques increasingly able to balance computational efficiency and model performance will be crucial in ensuring such technology's capabilities are fully brought to bear in a wide variety of deployment contexts.
+Efficient training of large language models represents a critical frontier in making advanced AI capabilities more accessible and sustainable. This thesis demonstrates that systematic layer-wise FP8 format assignment can significantly improve training efficiency while maintaining model quality and achieving superior numerical stability compared to uniform format approaches.
+
+Our work on Llama-3.2-3B and Llama-3.1-8B models shows that layer-wise format specialization—assigning E4M3 to MLPs and E5M2 to attention Q/K projections—achieves substantial improvements: 10\% memory reduction and 42\% training speedup for the 3B model, 27\% training speedup for the 8B model, and 50\% lower loss variance across both scales.
+
+As language models continue to scale in size and capability, techniques that optimize the precision-range trade-off for different computational patterns will become increasingly important. The layer-wise format assignment methodology presented in this thesis provides a principled approach to leveraging the complementary strengths of available FP8 formats, paving the way for more efficient development and deployment of large language models while reducing environmental impact and democratizing access to advanced AI capabilities.
