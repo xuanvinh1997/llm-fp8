@@ -1,0 +1,47 @@
+\begin{frame}[squeeze]{Experimental Setup}
+
+\begin{columns}[t]
+\begin{column}{0.48\textwidth}
+    \begin{block}{Models \& Dataset}
+    \small
+    \begin{itemize}
+        \item \textbf{Llama-3.2-3B} \& \textbf{Llama-3.1-8B}
+        \item OpenMathInstruct-2 (100K samples)
+        \item 3 epochs, seq. length 512
+        \item AdamW, lr 1e-5, grad accum. 4
+    \end{itemize}
+    \end{block}
+
+    \vspace{0.15cm}
+
+    \begin{block}{Hardware}
+    \small
+    \begin{itemize}
+        \item NVIDIA Blackwell GPUs (96 GB)
+        \item PyTorch 2.7+, Transformer Engine 2.5.0
+    \end{itemize}
+    \end{block}
+\end{column}
+
+\begin{column}{0.48\textwidth}
+    \begin{block}{Baselines Comparison}
+    \small
+    \begin{enumerate}
+        \item \textbf{BF16} {\footnotesize (mixed precision)}
+
+        \item \textbf{Hybrid FP8} {\footnotesize (delayed scaling)}
+
+        \item \textbf{Ours} {\footnotesize (layer-wise FP8)}
+    \end{enumerate}
+    \end{block}
+\end{column}
+\end{columns}
+
+\vspace{0.2cm}
+
+\begin{alertblock}{Evaluation Metrics}
+\small
+Training time • Memory usage • Loss variance • Perplexity • Convergence
+\end{alertblock}
+
+\end{frame}

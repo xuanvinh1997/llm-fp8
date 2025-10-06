@@ -1,0 +1,41 @@
+\begin{frame}[squeeze]{Proposed Approach: Layer-Wise FP8 Specialization}
+
+\begin{alertblock}{Key Insight}
+\small Different transformer components need different precision-range trade-offs
+\end{alertblock}
+
+\vspace{0.1cm}
+
+\begin{columns}[c]
+\begin{column}{0.58\textwidth}
+    \begin{block}{MLP Components $\rightarrow$ E4M3}
+    \small
+    \begin{itemize}
+        \item Concentrated distributions
+        \item Stable computations
+        \item Need higher precision
+    \end{itemize}
+    {\footnotesize $\forall \ell: W_{\ell}, A_{\ell}, G_{\ell} \mapsto \text{E4M3}$}
+    \end{block}
+
+    \vspace{0.1cm}
+
+    \begin{block}{Attention Q/K $\rightarrow$ E5M2}
+    \small
+    \begin{itemize}
+        \item Wide dynamic ranges
+        \item Softmax amplification
+        \item Need extended range
+    \end{itemize}
+    {\footnotesize $Q_{\ell}, K_{\ell} \mapsto \text{E5M2}; \quad V_{\ell}, O_{\ell} \mapsto \text{E4M3}$}
+    \end{block}
+\end{column}
+
+\begin{column}{0.40\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/fp8_convert.png}
+    \tiny Layer-wise FP8 assignment
+\end{column}
+\end{columns}
+
+\end{frame}
