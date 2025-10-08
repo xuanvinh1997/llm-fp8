@@ -10,31 +10,14 @@
 
 \vspace{0.1cm}
 
-\begin{columns}[c]
-\begin{column}{0.55\textwidth}
-    \begin{block}{Current Limitations}
-    \small
-    \begin{itemize}
-        \item FP8 can halve memory
-        \item Uniform format assignment
-        \item Misses format strengths
-    \end{itemize}
-    \end{block}
+\begin{block}{Current Limitations}
+\small
+\begin{itemize}
+    \item FP16/BF16 can waste memory
+    \item Uniform format assignment
+    \item Misses format strengths
+\end{itemize}
+\end{block}
 
-    \vspace{0.1cm}
-
-    \begin{alertblock}{FP8 Format Trade-offs}
-    \small
-    \textbf{E4M3:} Higher precision, limited range\\
-    \textbf{E5M2:} Wider range, lower precision
-    \end{alertblock}
-\end{column}
-
-\begin{column}{0.42\textwidth}
-    \centering
-    \includegraphics[width=\textwidth]{figures/fp8_convert.png}
-    \tiny Architecture overview
-\end{column}
-\end{columns}
 
 \end{frame}

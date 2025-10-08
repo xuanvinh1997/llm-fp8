@@ -1,0 +1,41 @@
+\begin{frame}[squeeze]{Format Assignment Details}
+
+\begin{columns}[c]
+\begin{column}{0.58\textwidth}
+    \begin{block}{MLP Components $\rightarrow$ E4M3}
+    \small
+    \begin{itemize}
+        \item Concentrated distributions
+        \item Need higher precision, stable computations
+    \end{itemize}
+    {\footnotesize  \begin{align}
+\forall \ell \in \mathcal{L}_{\mathrm{MLP}}: \quad &W_{\ell}, A_{\ell}, G_{\ell} \mapsto \text{E4M3} \label{eq:mlp_assignment}
+\end{align}}
+    \end{block}
+
+
+    \begin{block}{Attention $\rightarrow$ E5M2 \& E4M3} 
+    \small
+    \begin{itemize}
+        \item Wide dynamic ranges
+        \item Need extended range
+    \end{itemize}
+    {\footnotesize  \begin{align}
+\forall \ell \in \mathcal{L}_{\mathrm{Attn}}: \quad &\begin{cases}
+Q_{\ell}, K_{\ell} \mapsto \text{E5M2} \\
+V_{\ell}, O_{\ell} \mapsto \text{E4M3} \\
+G_{Q,\ell}, G_{K,\ell} \mapsto \text{E5M2} \\
+G_{V,\ell}, G_{O,\ell} \mapsto \text{E4M3}
+\end{cases} \label{eq:attn_assignment}
+\end{align}}
+    \end{block}
+\end{column}
+
+\begin{column}{0.40\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/fp8_convert.png}
+    \tiny Layer-wise FP8 assignment
+\end{column}
+\end{columns}
+
+\end{frame}

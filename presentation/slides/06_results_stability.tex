@@ -1,8 +1,10 @@
 \begin{frame}{Results: Loss Variance Analysis}
 
 \begin{columns}[c]
-\begin{column}{0.48\textwidth}
+\begin{column}{0.4\textwidth}
     \begin{block}{Loss Variance Comparison}
+    
+    \vspace{0.2cm}
     \begin{itemize}
         \item Our method: \textbf{$<$ 0.4}
         \item Hybrid FP8: Spikes \textbf{$\geq$ 0.8}
@@ -22,7 +24,7 @@
     \end{alertblock}
 \end{column}
 
-\begin{column}{0.50\textwidth}
+\begin{column}{0.60\textwidth}
     \centering
     \includegraphics[width=\textwidth]{figures/numeric_stability.png}
 
@@ -32,5 +34,8 @@
     \textbf{Key Observation:} Layer-wise FP8 maintains consistent low variance throughout training, while Hybrid FP8 shows periodic instability spikes.
 \end{column}
 \end{columns}
+\vspace{0.3cm}
+\tiny
+    Variance: $\sigma^2 = \frac{1}{n}\sum_{i=1}^{n}(L_i - \bar{L})^2$
 
 \end{frame}

@@ -1,0 +1,35 @@
+\begin{frame}[squeeze]{Proposed Approach: Layer-Wise FP8 Specialization}
+
+\begin{alertblock}{Key Insight}
+\small Different transformer components need different precision-range trade-offs
+\end{alertblock}
+
+\vspace{0.2cm}
+
+\begin{block}{Strategy: Hybrid Format Assignment}
+\small
+\begin{itemize}
+    \item \textbf{Attention layers}: Use hybrid E4M3 + E5M2
+    \begin{itemize}
+        \small
+        \item Forward pass: \textbf{E4M3} (stable activations)
+        \item Backward pass: \textbf{E5M2} (gradient explosions need extended range)
+    \end{itemize}
+    \item \textbf{MLP layers}: Use only E4M3
+    \begin{itemize}
+        \small
+        \item Both forward \& backward: \textbf{E4M3}
+        \item Concentrated distributions $\rightarrow$ Higher precision preferred
+    \end{itemize}
+\end{itemize}
+\end{block}
+
+\vspace{0.2cm}
+
+\begin{alertblock}{Rationale}
+\small
+\textbf{Attention}: Gradients through softmax have wide dynamic range $\rightarrow$ E5M2 for backward\\
+\textbf{MLP}: Feed-forward has narrow range in both directions $\rightarrow$ E4M3 precision
+\end{alertblock}
+
+\end{frame}

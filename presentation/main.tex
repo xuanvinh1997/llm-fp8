@@ -1,6 +1,7 @@
 \documentclass[aspectratio=169]{beamer}
 \usetheme{Madrid}
-\usecolortheme{beaver}
+\setbeamertemplate{blocks}[rounded][shadow=false]
+% \usecolortheme{beaver}
 
 % Packages
 \usepackage[utf8]{inputenc}
@@ -15,27 +16,37 @@
 \usepackage{adjustbox}
 
 % Theme settings
-\setbeamertemplate{navigation symbols}{}
-\setbeamertemplate{footline}[frame number]
-\setbeamertemplate{caption}[numbered]
+\setbeamertemplate{footline}{
+  \leavevmode%
+  \hbox{%
+  \begin{beamercolorbox}[wd=.5\paperwidth,ht=2.25ex,dp=1ex,left]{author in head/foot}%
+    \usebeamerfont{author in head/foot}\hspace*{2ex}\insertshortauthor
+  \end{beamercolorbox}%
+  \begin{beamercolorbox}[wd=.5\paperwidth,ht=2.25ex,dp=1ex,right]{date in head/foot}%
+    \usebeamerfont{date in head/foot}\insertframenumber{} / \inserttotalframenumber\hspace*{2ex}
+  \end{beamercolorbox}}%
+  \vskip0pt%
+}
+% \setbeamertemplate{navigation symbols}{}
+% \setbeamertemplate{caption}[numbered]
 
 % Custom colors
-\definecolor{darkblue}{RGB}{0,51,102}
-\definecolor{lightblue}{RGB}{51,153,255}
-\setbeamercolor{structure}{fg=darkblue}
-\setbeamercolor{block title}{bg=darkblue,fg=white}
-\setbeamercolor{block body}{bg=lightblue!10,fg=black}
+% \definecolor{darkblue}{RGB}{0,51,102}
+% \definecolor{lightblue}{RGB}{51,153,255}
+% \setbeamercolor{structure}{fg=darkblue}
+% \setbeamercolor{block title}{bg=darkblue,fg=white}
+% \setbeamercolor{block body}{bg=lightblue!10,fg=black}
 
 % Better spacing
 \setlength{\leftmargini}{0.8em}
 \setlength{\leftmarginii}{0.6em}
 
 % Title information
-\title{Optimizing LLM Training with Layer-Wise FP8 Format Assignment}
+\title{Method for Optimizing Large Language Models for Edge Devices}
 \author{Vinh Pham Xuan}
 \institute{
     University of Engineering and Technology, VNU Hanoi\\
-    Supervisors: Dr. Khoi Nguyen Le, Dr. Vinh Nguyen Van
+    Supervisors: Dr. Vinh Nguyen Van
 }
 \date{\today}
 
@@ -48,7 +59,8 @@
 \input{slides/02_problem}
 
 % Proposed Approach
-\input{slides/03_approach}
+\input{slides/03_approach_part1}
+\input{slides/03_approach_part2}
 
 % Experimental Setup
 \input{slides/04_setup}
@@ -62,8 +74,8 @@
 % Results - Convergence Quality
 \input{slides/07_results_convergence}
 
-% Contributions and Impact
-\input{slides/08_contributions}
+% Results - Training Perplexity
+\input{slides/08_results_perplexity}
 
 % Conclusion and Future Work
 \input{slides/09_conclusion}

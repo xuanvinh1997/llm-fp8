@@ -1,7 +1,7 @@
 \begin{frame}[squeeze]{Results: Performance Improvements}
 
 \begin{columns}[c]
-\begin{column}{0.55\textwidth}
+\begin{column}{0.4\textwidth}
     \begin{block}{Training Time Reduction}
     \small
     \begin{tabular}{@{}lcc@{}}
@@ -19,7 +19,7 @@
 
     \vspace{0.15cm}
 
-    \begin{block}{Memory Efficiency (3B)}
+    \begin{block}{Memory Efficiency}
     \small
     82.4 GB $\rightarrow$ \textbf{74.2 GB} (\textcolor{blue}{10\% $\downarrow$})
     \end{block}
@@ -28,11 +28,11 @@
 
     \begin{alertblock}{Key Findings}
     \small
-    1.3-1.7$\times$ speedup • Scales favorably • Beats Hybrid
+    1.3-1.7$\times$ speedup over BF16
     \end{alertblock}
 \end{column}
 
-\begin{column}{0.42\textwidth}
+\begin{column}{0.6\textwidth}
     \centering
     \includegraphics[width=\textwidth]{figures/training_time.png}
     {\tiny Training time comparison}
