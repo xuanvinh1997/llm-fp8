@@ -21,7 +21,7 @@ FP16 & 1 & 5 & 10 \\
 \end{tabular}
 \end{table}
 
-Because it shares FP32’s exponent width, BF16 seldom suffers from the underflow or overflow that can plague FP16. Cutting each value to 16 bits halves both memory use and bandwidth demands, yet models often require little or no code change because mainstream frameworks already expose BF16 kernels.
+Because it shares FP32\'s exponent width, BF16 seldom suffers from the underflow or overflow that can plague FP16. Cutting each value to 16 bits halves both memory use and bandwidth demands, yet models often require little or no code change because mainstream frameworks already expose BF16 kernels.
 
 BF16 are supported by the following hardwares: Google TPUs (v2 and beyond), NVIDIA Ampere/Hopper GPUs, and recent Intel CPUs with \texttt{AVX512\_BF16} instructions all execute BF16 natively.
 
@@ -53,7 +53,7 @@ BF16 captures much of the memory and speed advantage of reduced-precision arithm
 
 \subsection{FP8}
  
-\textbf{FP8} is characterized for being among the families of 8-bit floating points designed for maximum throughput bandwidth\cite{nvidia_fp8_primer}. There are two main layouts. The \textbf{E4M3} version divides the byte into one sign bit and a 4 bits exponent plus a 3 bits mantissa while \textbf{E5M2} moves 1 bit from the mantissa to the exponent, which gives 5 bits for the range and 2 bits for fraction. Table~\ref{tab:fp8-layout} collects both layouts with some of their typical uses in training cycles.
+\textbf{FP8} is characterized for being among the families of 8-bit floating points designed for maximum throughput bandwidth. There are two main layouts. The \textbf{E4M3} version divides the byte into one sign bit and a 4 bits exponent plus a 3 bits mantissa while \textbf{E5M2} moves 1 bit from the mantissa to the exponent, which gives 5 bits for the range and 2 bits for fraction. Table~\ref{tab:fp8-layout} collects both layouts with some of their typical uses in training cycles.
 
 \begin{table}[h]
 

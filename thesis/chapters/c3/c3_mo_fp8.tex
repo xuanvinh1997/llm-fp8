@@ -32,12 +32,12 @@ We convert Llama model checkpoints from Hugging Face by replacing the standard \
 \begin{verbatim}
 @contextmanager
 def replace_decoder(te_decoder_cls):
-    original_cls = transformers.models.llama.modeling_llama.LlamaDecoderLayer
-    transformers.models.llama.modeling_llama.LlamaDecoderLayer = te_decoder_cls
+    original_cls = LlamaDecoderLayer
+    LlamaDecoderLayer = te_decoder_cls
     try:
         yield
     finally:
-        transformers.models.llama.modeling_llama.LlamaDecoderLayer = original_cls
+        LlamaDecoderLayer = original_cls
 \end{verbatim}
 
 The \texttt{TELlamaDecoderLayer} replaces standard PyTorch layers with Transformer Engine equivalents:

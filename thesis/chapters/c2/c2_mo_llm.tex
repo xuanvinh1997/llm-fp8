@@ -32,14 +32,15 @@ In the original design layer normalization (LN) was used, however many of the
 modern LLMs would prefer the root-mean-squared!
 normalizing (RMSNorm) to save computation with no sacrifice of generalization performance.
 observable degradation.
-Figure~\ref{fig:self_attention} (reproduced) depicts the information
-flow through a single self-attention block.
 \begin{figure}[h]
     \centering
     \includegraphics[width=1\linewidth]{figures/c2/self_attention.png}
     \caption{Self-Attention}
     \label{fig:self_attention}
 \end{figure}
+Figure~\ref{fig:self_attention} (reproduced) depicts the information
+flow through a single self-attention block.
+
 \subsection{Scaled Dot-Product Self Attention}\label{sec:self_attn}
 
 Given query, key, and value matrices
