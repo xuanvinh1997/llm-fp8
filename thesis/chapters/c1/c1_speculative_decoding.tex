@@ -1,0 +1,79 @@
+\section{Speculative Decoding Methodology}
+
+\subsection{Draft-Verify Framework}
+
+\subsubsection{Motivation}
+Autoregressive generation is memory-bandwidth bound. A single forward pass reads all model weights (~TB) to generate one token. The GPU compute is vastly underutilized.
+
+\subsubsection{Core Algorithm}
+\begin{verbatim}
+Input: Draft model M_d (small, fast), Target model M_t (large, accurate)
+       Speculation length gamma
+
+1. Draft phase: Generate gamma candidate tokens using M_d
+   x_tilde_1, x_tilde_2, ..., x_tilde_gamma ~ M_d(prefix)
+
+2. Verify phase: Run M_t on all gamma+1 positions in parallel
+   p_1, p_2, ..., p_{gamma+1} = M_t(prefix, x_tilde_1, ..., x_tilde_gamma)
+
+3. Accept/Reject via rejection sampling:
+   For i = 1 to gamma:
+     q_i = M_d(x_tilde_i | prefix, x_tilde_1, ..., x_tilde_{i-1})  # Draft probability
+     p_i = M_t(x_tilde_i | prefix, x_tilde_1, ..., x_tilde_{i-1})  # Target probability
+     
+     if random() < min(1, p_i/q_i):
+       Accept x_tilde_i, continue
+     else:
+       Reject x_tilde_i, resample from residual distribution
+       Break (discard remaining draft tokens)
+
+4. Return accepted tokens + one target-sampled token
+\end{verbatim}
+
+\subsubsection{Rejection Sampling Guarantee}
+The accepted sequence follows the exact target model distribution:
+\begin{equation*} P(\text{accept } x) = \min(1, p(x)/q(x)) \cdot q(x) = \min(q(x), p(x)) 
+\end{equation*}
+\begin{equation*} P(\text{resample from residual}) = \sum_x \max(0, p(x) - q(x)) 
+\end{equation*}
+
+\subsubsection{Expected Accepted Tokens}
+\begin{equation*} E[\text{accepted}] = \sum_{i=1}^{\gamma} \prod_{j=1}^{i} \alpha_j 
+\end{equation*}
+Where $\alpha_j = \sum_x \min(p_j(x), q_j(x))$ is the acceptance rate at position $j$.
+
+\subsubsection{Speedup Analysis}
+Let $c = \text{cost}(M_d)/\text{cost}(M_t)$ be the relative draft model cost.
+\begin{verbatim}
+Standard decoding: gamma target forward passes
+Speculative decoding: gamma draft passes + 1 target pass = gamma*c + 1
+
+Speedup = gamma / (gamma*c + 1) * E[accepted] / gamma
+        ~ (1 - c) * acceptance_rate / (1 + c*gamma)
+\end{verbatim}
+
+\subsection{EAGLE: Feature-Level Speculation}
+
+\subsubsection{Innovation}
+Instead of using a separate draft model, EAGLE predicts from the target model's own hidden states.
+
+\subsubsection{Architecture}
+\begin{enumerate}
+    \item Extract feature from second-to-last layer: $f_t = M_t.\text{layer}[-2](x)$
+    \item Lightweight autoregressive head predicts next features:
+    $f_{\text{tilde}_{t+1}} = \text{EAGLE\_head}(f_t, \text{embedding}(x_t))$
+    \item Project to vocabulary: $\text{logits} = M_t.\text{lm\_head}(f_{\text{tilde}_{t+1}})$ 
+\end{enumerate}
+
+\subsubsection{Training}
+\begin{equation*} \text{Loss} = \sum_t ||f_{t+1} - \text{EAGLE\_head}(f_t, \text{emb}(x_t))||^2 + \text{CE}(\text{logits}, x_{t+1}) 
+\end{equation*}
+
+\subsubsection{EAGLE-2 Dynamic Trees}
+Rather than linear speculation, EAGLE-2 builds draft trees based on confidence:
+\begin{enumerate}
+    \item Generate multiple candidates per position based on top-k
+    \item Expand high-confidence branches more deeply
+    \item Verify entire tree in single target pass using tree attention mask
+    \item Accept longest valid path
+\end{enumerate}

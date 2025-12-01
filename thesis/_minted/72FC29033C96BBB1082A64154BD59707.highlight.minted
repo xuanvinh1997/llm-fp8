@@ -1,0 +1,13 @@
+\begin{MintedVerbatim}[commandchars=\\\{\}]
+Input: Weight matrix W, inverse Hessian H\PYGZus{}inv, sparsity/quantization target
+Output: Quantized weight matrix W\PYGZus{}quant
+
+1. Compute Cholesky decomposition of H\PYGZus{}inv
+2. For j = 0 to d\PYGZus{}col in blocks of size B:
+   a. For each column in block:
+      \PYGZhy{} Quantize column j: w\PYGZus{}quant\PYGZus{}j = quant(w\PYGZus{}j)
+      \PYGZhy{} Compute quantization error: delta\PYGZus{}j = (w\PYGZus{}j \PYGZhy{} w\PYGZus{}quant\PYGZus{}j) / [H\PYGZus{}inv]\PYGZus{}jj
+      \PYGZhy{} Update remaining columns in block: W[:,j+1:] \PYGZhy{}= delta\PYGZus{}j * H\PYGZus{}inv[j,j+1:]
+   b. Apply lazy batch update to columns beyond current block
+3. Return W\PYGZus{}quant
+\end{MintedVerbatim}

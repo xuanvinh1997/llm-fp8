@@ -24,6 +24,7 @@
 \usepackage{afterpage}
 \usepackage{multirow}
 \usepackage{sectsty}
+\usepackage{fancyhdr}
 \usepackage{tocloft,calc}
 \usepackage{listings}
 \usepackage{makecell}
@@ -61,6 +62,17 @@
 \AtBeginDocument{\addtolength\cftchapnumwidth{\widthof{\bfseries Chapter }}}
 \setlength{\parskip}{0.4em}
 \setlength{\parindent}{0pt}
+
+% Page numbering in footer
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0pt}
+\fancypagestyle{plain}{
+  \fancyhf{}
+  \fancyfoot[C]{\thepage}
+  \renewcommand{\headrulewidth}{0pt}
+}
 %
 
 %
@@ -68,6 +80,10 @@
 
 \begin{document}
 \input{cover}\newpage\cleardoublepage
+
+% Restore page numbering after cover
+\pagenumbering{roman}
+\pagestyle{fancy}
 
 % Acknowledgement
 \input{chapters/acknowledgement}\newpage\cleardoublepage
@@ -83,10 +99,20 @@
 
 \newpage
 \input{chapters/glossary}\newpage\cleardoublepage
-%\listoftables
 
+\newpage
+\addcontentsline{toc}{chapter}{\listfigurename}
+\listoffigures\cleardoublepage
+
+\newpage
+\addcontentsline{toc}{chapter}{\texorpdfstring{\listtablename}{List of Tables}}
+\listoftables
 
 %
+% Switch to Arabic numerals for main content
+\pagenumbering{arabic}
+\pagestyle{fancy}
+
 % \input{chapters/introduction}\newpage\cleardoublepage
 \input{chapters/c1/c1_introduction}\newpage\cleardoublepage
 \input{chapters/c2/c2_mo}\newpage\cleardoublepage
@@ -98,13 +124,6 @@
 \phantomsection 
 \addcontentsline{toc}{chapter}{Reference}
 
-\newpage
-\addcontentsline{toc}{chapter}{\listfigurename}
-\listoffigures\cleardoublepage
-
-\newpage
-\addcontentsline{toc}{chapter}{\texorpdfstring{\listtablename}{List of Tables}}
-\listoftables
 
 \bibliography{references}\newpage\cleardoublepage
 \bibliographystyle{plain}

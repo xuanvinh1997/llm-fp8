@@ -1,0 +1,98 @@
+\section{Parameter-Efficient Fine-Tuning Methodologies}
+
+\subsection{LoRA: Low-Rank Adaptation}
+
+\subsubsection{Mathematical Foundation}
+The intrinsic dimensionality hypothesis suggests weight updates during fine-tuning lie in a low-dimensional subspace.
+
+\subsubsection{Formulation}
+For a pre-trained weight matrix $W_0 \in R^{d \times k}$, LoRA parameterizes the update as:
+\begin{equation*} W = W_0 + \Delta W = W_0 + B \cdot A
+\end{equation*}
+Where: $B \in R^{d \times r}, A \in R^{r \times k}, r \ll \min(d,k)$
+
+\subsubsection{Forward Pass}
+\begin{equation*} h = W_0 \cdot x + (B \cdot A) \cdot x = W_0 \cdot x + B \cdot (A \cdot x)
+\end{equation*}
+
+\subsubsection{Initialization}
+\begin{itemize}
+    A: Random Gaussian initialization
+    B: Zero initialization ($\Delta W = 0$ at start, preserving pre-trained behavior)
+\end{itemize}
+
+\subsubsection{Scaling Factor}
+\begin{equation*} h = W_0 \cdot x + (\alpha/r) \cdot B \cdot A \cdot x
+\end{equation*}
+Where $\alpha$ is a hyperparameter controlling adaptation strength. Setting $\alpha = r$ at the start of experiments allows changing $r$ without re-tuning learning rate.
+
+\subsubsection{Parameter Reduction}
+\begin{verbatim}
+Full fine-tuning: d x k parameters
+LoRA: r x (d + k) parameters
+
+Reduction factor: dk / (r(d+k)) approx d/(2r) for d approx k
+Example: d=k=4096, r=8 -> 256x reduction
+\end{verbatim}
+
+\subsubsection{Target Modules}
+Typically applied to attention projections:
+\begin{itemize}
+    Query (W_q): Most impactful
+    Value (W_v): Second most impactful
+    Key (W_k): Less impact
+    Output (W_o): Moderate impact
+    FFN layers: Useful for some tasks
+\end{itemize}
+
+\subsubsection{Merging for Inference}
+\begin{equation*} W_{\text{deployed}} = W_0 + (\alpha/r) \cdot B \cdot A
+\end{equation*}
+No additional inference latency—adapters are absorbed into base weights.
+
+\subsection{QLoRA: Quantized LoRA}
+
+\subsubsection{Three Key Innovations}
+
+\paragraph{1. NF4 Base Model Quantization}
+Store frozen base model in 4-bit NF4, dequantize on-the-fly for computation:
+\begin{verbatim}
+Compute: Y = dequant(W_NF4) * X + B*A*X
+         = (scale * nf4_lookup[indices]) * X + B*A*X
+
+Storage: 4 bits/weight + 32-bit scale per group (e.g., 64 weights)
+Compute: BF16 precision
+\end{verbatim}
+
+\paragraph{2. Double Quantization}
+Quantize the quantization constants themselves:
+\begin{verbatim}
+Standard: 32-bit scale per group of 64 weights -> 32/64 = 0.5 bits/weight overhead
+Double quant: 8-bit scale with 256-group second-level quantization
+             -> 8/64 + 32/256 = 0.125 + 0.125 = 0.25 bits/weight
+Savings: ~0.37 bits/weight (approx 3GB for 65B model)
+\end{verbatim}
+
+\paragraph{3. Paged Optimizers}
+Handle memory spikes during gradient checkpointing:
+\begin{verbatim}
+When GPU memory exhausted:
+1. CUDA unified memory pages optimizer states to CPU
+2. Computation continues with automatic page faults
+3. States paged back on access
+
+No code changes required-transparent to training loop
+\end{verbatim}
+
+\subsubsection{Memory Breakdown (65B model)}
+\begin{tabular}{l|l|l}
+\textbf{Component} & \textbf{Full FT} & \textbf{QLoRA} \\
+\hline
+Base model weights & 130GB & ~16GB (4-bit) \\
+Gradients & 130GB & 0 (frozen base) \\
+Optimizer states & 260GB & ~0.5GB (LoRA only) \\
+Activations & Variable & ~4GB (checkpointing) \\
+LoRA adapters & N/A & ~0.5GB \\
+\hline
+Total & >520GB & ~21GB \\
+\end{tabular}

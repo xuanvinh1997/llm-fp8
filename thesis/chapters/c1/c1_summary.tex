@@ -1,0 +1,15 @@
+\section{Complexity Summary and Trade-offs}
+
+\begin{tabular}{l|l|l|l}
+\textbf{Technique} & \textbf{Time Complexity} & \textbf{Space Reduction} & \textbf{Quality Impact} \\
+\hline
+GPTQ (4-bit) & O(d^3) per layer & 4x & ~0.1-0.5 perplexity \\
+AWQ (4-bit) & O(calibration) & 4x & <GPTQ degradation \\
+SparseGPT 50% & O(d^3) per layer & ~2x & ~0.05 perplexity \\
+FlashAttention & Same FLOPs & O(N) vs O(N^2) & Exact (none) \\
+PagedAttention & Slight overhead & ~4% waste vs 60-80% & None \\
+Speculative (gamma=5) & 5c + 1 target calls & None & Exact (none) \\
+LoRA (r=8) & <1% params trained & 256x checkpoint & Task-dependent \\
+QLoRA & Same as LoRA & 10-20x memory & Same as LoRA \\
+\end{tabular}
+

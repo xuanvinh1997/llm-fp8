@@ -1,0 +1,38 @@
+\section{Implementation Guidelines}
+
+\subsection{Framework Selection by Target}
+
+\begin{tabular}{l|l|l}
+\textbf{Target Platform} & \textbf{Recommended Stack} & \textbf{Key Techniques} \\
+\hline
+NVIDIA Datacenter & TensorRT-LLM + vLLM & FP8, PagedAttention, continuous batching \\
+NVIDIA Consumer & ExLlamaV2 or llama.cpp & GPTQ/EXL2, Flash-Attn \\
+Apple Silicon & MLX & 4-bit native, unified memory \\
+CPU-only & llama.cpp & GGUF Q4_K_M, AVX-512/AMX \\
+Mobile & MLC-LLM & INT4, NPU delegation \\
+\end{tabular}
+
+\subsection{Quantization Selection}
+\begin{verbatim}
+Decision tree:
+1. Is accuracy critical? 
+   -> Yes: Q8_0 or AWQ INT4
+   -> No: Continue
+
+2. Is memory severely constrained?
+   -> Yes: Q3_K_M or IQ3_XXS
+   -> No: Q4_K_M or Q5_K_M
+
+3. Is serving throughput priority?
+   -> Yes: AWQ (fast quant) + vLLM
+   -> No: GPTQ (slightly better accuracy)
+\end{verbatim}
+
+\subsection{Fine-tuning Decision}
+\begin{verbatim}
+Memory available vs Model size:
+- >4x model size: Full fine-tuning feasible
+- 2-4x model size: LoRA with BF16 base
+- 1-2x model size: QLoRA required
+- <1x model size: Gradient checkpointing + QLoRA
+\end{verbatim}
