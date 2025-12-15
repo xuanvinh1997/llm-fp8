@@ -17,8 +17,8 @@ Where: $B \in R^{d \times r}, A \in R^{r \times k}, r \ll \min(d,k)$
 
 \subsubsection{Initialization}
 \begin{itemize}
-    A: Random Gaussian initialization
-    B: Zero initialization ($\Delta W = 0$ at start, preserving pre-trained behavior)
+    \item A: Random Gaussian initialization
+    \item B: Zero initialization ($\Delta W = 0$ at start, preserving pre-trained behavior)
 \end{itemize}
 
 \subsubsection{Scaling Factor}
@@ -38,11 +38,11 @@ Example: d=k=4096, r=8 -> 256x reduction
 \subsubsection{Target Modules}
 Typically applied to attention projections:
 \begin{itemize}
-    Query (W_q): Most impactful
-    Value (W_v): Second most impactful
-    Key (W_k): Less impact
-    Output (W_o): Moderate impact
-    FFN layers: Useful for some tasks
+    \item Query ($W_q$): Most impactful
+    \item Value ($W_v$): Second most impactful
+    \item Key ($W_k$): Less impact
+    \item Output ($W_o$): Moderate impact
+    \item FFN layers: Useful for some tasks
 \end{itemize}
 
 \subsubsection{Merging for Inference}
