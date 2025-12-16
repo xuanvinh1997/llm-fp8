@@ -57,7 +57,8 @@ Adopted by PaLM \cite{chowdhery2023palm}, LLaMA-2 \cite{touvron2023llama}, Qwen-
 \subsection{Implementation note.}
 SwiGLU is memory- and compute-friendly: a single fused kernel can realise
 Eqs.~\eqref{eq:swiglu} in mixed precision (BF16/FP8).  
-Support ships with \texttt{FlashAttention\,2} \cite{dao2023flashattention2}, \texttt{Transformer-Engine}, and
+Support ships with \texttt{FlashAttention\,2} \cite{dao2023flashattention2}, 
+\texttt{Transformer-Engine}, and
 recent PyTorch \texttt{torch.\allowbreak nn.\allowbreak SiLU} + custom CUDA extensions.
 
 \subsection{When to prefer alternatives.}
