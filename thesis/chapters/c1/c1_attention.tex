@@ -1,138 +1,88 @@
-\section{Attention Optimization Methodologies}
+\section{Optimization of the Attention Mechanism}
 
-\subsection{FlashAttention: IO-Aware Exact Attention}
+The attention mechanism, while foundational to the success of transformer-based models, presents a significant computational and memory bottleneck, particularly for long sequences. This section details two seminal techniques, FlashAttention and PagedAttention, that address these challenges.
 
-\subsubsection{Memory Hierarchy Context}
-\begin{itemize}
-    \item HBM (High Bandwidth Memory): 40-80GB, ~1.5-2 TB/s bandwidth
-    \item SRAM (On-chip): ~20MB total (192KB x 108 SMs on A100), ~19 TB/s bandwidth
-\end{itemize}
+\subsection{FlashAttention: An I/O-Aware Exact Attention Algorithm}
 
-Standard attention materializes $N \times N$ intermediate matrices in HBM, causing memory-bound operations.
+The primary bottleneck in the standard implementation of the attention mechanism is not the number of floating-point operations (FLOPs), but the extensive data movement between the high-bandwidth memory (HBM) and the much faster on-chip SRAM of a GPU.
 
-\subsubsection{Standard Attention Memory Pattern}
-\begin{verbatim}
-1. S = Q @ K^T          -> Write NxN to HBM
-2. P = softmax(S)       -> Read NxN, Write NxN to HBM  
-3. O = P @ V            -> Read NxN from HBM
-Total HBM access: Theta(N^2 + Nd) 
-\end{verbatim}
+\subsubsection{The Memory Hierarchy Bottleneck}
+Modern GPUs have a distinct memory hierarchy, with a large-capacity High-Bandwidth Memory (HBM) that has relatively lower bandwidth (approx. 1.5-2.0 TB/s) and a much faster on-chip SRAM with extremely limited capacity (e.g., ~20 MB) but high bandwidth (approx. 19 TB/s).
 
-\subsubsection{FlashAttention Tiling Strategy}
-Divide Q, K, V into blocks that fit in SRAM and compute attention incrementally:
-\begin{verbatim}
-Block sizes: B_r (row blocks), B_c (column blocks)
-Constraint: B_r * B_c <= M (SRAM size)
+A standard attention implementation materializes large intermediate matrices (e.g., the $N \times N$ attention score matrix) in HBM. These repeated read and write operations make the computation severely constrained by memory bandwidth.
 
-For each K,V block j:
-  For each Q block i:
-    Load Q_i, K_j, V_j to SRAM
-    Compute local attention: S_ij = Q_i @ K_j^T
-    Apply local softmax with running statistics
-    Update output accumulator
-\end{verbatim}
+\subsubsection{Memory Access Pattern of Standard Attention}
+The data flow in a standard attention layer highlights this inefficiency. First, the attention scores are computed as $\mathbf{S} = \mathbf{Q}\mathbf{K}^T$, which results in an $N \times N$ matrix that is written to HBM. Then, the softmax of this matrix is computed, $\mathbf{P} = \text{softmax}(\mathbf{S})$, which requires reading the $N \times N$ matrix from HBM and writing it back. Finally, the output is computed as $\mathbf{O} = \mathbf{P}\mathbf{V}$, which reads the $N \times N$ matrix from HBM again.
+This leads to a total HBM access complexity of $\Theta(N^2 + Nd)$, where $N$ is the sequence length and $d$ is the head dimension.
 
-\subsubsection{Online Softmax Algorithm}
-The challenge: softmax requires the full row to compute the normalization constant.
+\subsubsection{The FlashAttention Tiling and Recomputation Strategy}
+FlashAttention reformulates the attention computation to avoid the materialization of the $N \times N$ matrices. It achieves this through two key ideas: tiling and online softmax.
 
-Solution: Track running maximum $m$ and sum $l$, rescale incrementally:
-\begin{verbatim}
-Initialize: m = -inf, l = 0, O = 0
+The core strategy is to partition the query, key, and value matrices into smaller blocks that can fit into the fast SRAM. The attention output is then computed incrementally, one block at a time.
 
-For each block j:
-  1. Compute S_ij = Q_i @ K_j^T / sqrt(d)
-  2. Compute block maximum: m_tilde = rowmax(S_ij)
-  3. Update global maximum: m_new = max(m, m_tilde)
-  4. Compute local softmax: P_tilde_ij = exp(S_ij - m_tilde)
-  5. Update running sum: l_new = e^(m - m_new) * l + e^(m_tilde - m_new) * rowsum(P_tilde_ij)
-  6. Update output: O = e^(m - m_new) * O + e^(m_tilde - m_new) * P_tilde_ij @ V_j
-  7. m = m_new, l = l_new
+\begin{algorithm}[H]
+\caption{FlashAttention Tiling and Recomputation}
+\begin{algorithmic}[1]
+\Require Query $\mathbf{Q}$, Key $\mathbf{K}$, Value $\mathbf{V}$ matrices
+\Ensure Output matrix $\mathbf{O}$
+\State Define block sizes $B_r$ (for rows) and $B_c$ (for columns) such that blocks fit in SRAM.
+\State $M \gets \text{SRAM capacity}$
+\State \textbf{Constraint:} $B_r \cdot d + B_c \cdot d + B_r \cdot B_c \le M$
+\For{each block $j$ of $\mathbf{K}$ and $\mathbf{V}$}
+    \For{each block $i$ of $\mathbf{Q}$}
+        \State Load $\mathbf{Q}_i, \mathbf{K}_j, \mathbf{V}_j$ from HBM to SRAM.
+        \State Compute local attention scores: $\mathbf{S}_{ij} = \mathbf{Q}_i \mathbf{K}_j^T$.
+        \State Apply numerically stable softmax using running statistics.
+        \State Update the output accumulator $\mathbf{O}_i$.
+    \EndFor
+\EndFor
+\State \textbf{return} $\mathbf{O}$
+\end{algorithmic}
+\end{algorithm}
 
-Final: O = O / l
-\end{verbatim}
+\subsubsection{The Online Softmax Algorithm}
+A naive application of tiling is not possible because the softmax function requires access to an entire row of the attention matrix to compute the normalization constant. FlashAttention resolves this by using an "online" or "one-pass" softmax algorithm that maintains running statistics.
 
-\subsubsection{IO Complexity}
-\begin{verbatim}
-Standard attention: Theta(Nd + N^2) HBM accesses
-FlashAttention: Theta(N^2*d^2/M) HBM accesses
-\end{verbatim}
+For each row, the algorithm tracks the running maximum, $m$, and the running sum of exponentials, $l$. As it processes each block, it updates these statistics and rescales the output accordingly.
 
-For typical M (SRAM size), this is a significant reduction.
+\begin{algorithm}[H]
+\caption{Online Softmax Algorithm}
+\begin{algorithmic}[1]
+\Require Query block $\mathbf{Q}_i$, Key block $\mathbf{K}_j$, Value block $\mathbf{V}_j$
+\Ensure Updated output accumulator $\mathbf{O}$, running max $m$, running sum $l$
+\State Initialize: $m = -\infty$, $l = 0$, $\mathbf{O} = \mathbf{0}$
+\For{each block $j$}
+    \State Compute local scores: $\mathbf{S}_{ij} = \mathbf{Q}_i \mathbf{K}_j^T / \sqrt{d}$.
+    \State Find the block's maximum: $\tilde{m} = \text{rowmax}(\mathbf{S}_{ij})$.
+    \State Update the global maximum: $m_{\text{new}} = \max(m, \tilde{m})$.
+    \State Compute the local softmax probabilities: $\tilde{\mathbf{P}}_{ij} = \exp(\mathbf{S}_{ij} - \tilde{m})$.
+    \State Update the running sum of exponentials: $l_{\text{new}} = e^{m - m_{\text{new}}} \cdot l + e^{\tilde{m} - m_{\text{new}}} \cdot \text{rowsum}(\tilde{\mathbf{P}}_{ij})$.
+    \State Update the output accumulator: $\mathbf{O} \leftarrow e^{m - m_{\text{new}}} \cdot \mathbf{O} + e^{\tilde{m} - m_{\text{new}}} \cdot (\tilde{\mathbf{P}}_{ij} \mathbf{V}_j)$.
+    \State Update statistics: $m \leftarrow m_{\text{new}}$, $l \leftarrow l_{\text{new}}$.
+\EndFor
+\State Finalize: $\mathbf{O} = \mathbf{O} / l$.
+\State \textbf{return} $\mathbf{O}$
+\end{algorithmic}
+\end{algorithm}
 
-\subsubsection{Backward Pass}
-FlashAttention recomputes S and P during backward pass rather than storing them:
-\begin{itemize}
-    \item Saves $O(N^2)$ memory
-    \item Additional FLOPs are offset by reduced memory traffic
-    \item Stores only O (output) and softmax normalization statistics (m, l)
-\end{itemize}
+\subsubsection{I/O Complexity Analysis}
+By avoiding the materialization of the large intermediate matrices, FlashAttention significantly reduces the number of HBM accesses. The HBM access complexity of standard attention is $\Theta(Nd + N^2)$, while for FlashAttention it is $\Theta(N^2 d^2 / M)$, where $M$ is the SRAM size.
+Given the typical size of $M$, this reduction is substantial and allows the computation to become compute-bound rather than memory-bound.
 
-\subsection{PagedAttention: Virtual Memory for KV-Cache}
+\subsubsection{Backward Pass Optimization}
+During the backward pass, FlashAttention recomputes the attention scores and probabilities rather than storing them from the forward pass. While this increases the number of FLOPs, it avoids the $O(N^2)$ memory cost of storing the full attention matrix, and the additional computation is faster than the memory access it replaces.
 
-\subsubsection{Problem}
-KV-cache grows dynamically and varies per request. Traditional pre-allocation wastes 60-80% of memory through:
-\begin{itemize}
-    \item Internal fragmentation: Pre-allocated slots never filled
-    \item External fragmentation: Gaps between variable-size allocations
-    \item Redundant duplication: Shared prefixes stored multiple times
-\end{itemize}
+\subsection{PagedAttention: Efficient Memory Management for the KV-Cache}
 
-\subsubsection{Core Concept}
-Apply OS virtual memory principles:
-\begin{itemize}
-    \item Pages $\rightarrow$ KV blocks (fixed size, e.g., 16 tokens)
-    \item Virtual addresses $\rightarrow$ Logical block indices
-    \item Physical addresses $\rightarrow$ GPU memory locations
-    \item Page table $\rightarrow$ Block table mapping logical to physical
-\end{itemize}
+\subsubsection{The Problem of KV-Cache Fragmentation}
+During inference, the key and value vectors for all preceding tokens (the "KV-cache") must be stored in memory. The size of this cache is dynamic and varies significantly between different requests. Traditional memory allocation schemes pre-allocate a contiguous block of memory for the KV-cache, leading to substantial waste from internal fragmentation, where pre-allocated slots are never used; external fragmentation, which creates unused gaps between memory allocations of variable sizes; and redundant storage, where the same prompt tokens are often stored multiple times across different requests in a batch.
+This inefficiency can result in 60-80\% of the allocated memory being wasted.
 
-\subsubsection{Data Structures}
-\begin{minted}{python}
-class BlockTable:
-    # Maps logical_block_idx -> (physical_block_idx, num_filled_slots)
-    entries: List[Tuple[int, int]]
+\subsubsection{Core Concept: Virtual Memory for Attention}
+PagedAttention adapts the classic operating systems concept of virtual memory and paging to the management of the KV-cache. The KV-cache is partitioned into fixed-size "blocks" (analogous to memory pages), and a "block table" (analogous to a page table) maps the logical indices of the blocks for a given sequence to their physical locations in GPU memory. This allows for non-contiguous storage of the KV-cache, eliminating fragmentation and enabling more flexible memory management.
 
-class KVCacheManager:
-    physical_blocks: Tensor  # [num_blocks, num_heads, head_dim, block_size]
-    free_blocks: List[int]   # Available physical block indices
-    block_tables: Dict[request_id, BlockTable]
-\end{minted}
+\subsubsection{Memory Sharing via Copy-on-Write}
+PagedAttention enables efficient memory sharing for common prefixes. For example, in parallel decoding from the same prompt, all generated sequences can share the physical blocks corresponding to the prompt's KV-cache. This is managed using reference counting. When a shared block needs to be modified, a copy-on-write mechanism ensures that a new block is allocated and the data is copied, preserving the integrity of the shared data.
 
-\subsubsection{Attention Computation}
-\begin{minted}{python}
-def paged_attention(query, block_table, k_cache, v_cache):
-    output = zeros_like(query) 
-    
-    for logical_idx, (physical_idx, filled) in enumerate(block_table):
-        # Fetch non-contiguous KV blocks
-        k_block = k_cache[physical_idx, :, :, :filled]
-        v_block = v_cache[physical_idx, :, :, :filled]
-        
-        # Compute attention for this block
-        scores = query @ k_block.T / sqrt(head_dim)
-        # Accumulate with proper softmax normalization
-        output += softmax(scores) @ v_block
-    
-    return output
-\end{minted}
-
-\subsubsection{Memory Sharing (Copy-on-Write)}
-\begin{verbatim}
-Scenario: Multiple outputs from same prompt
-
-1. All sequences share physical blocks for prompt KV-cache
-2. Reference count tracks sharing: ref_count[physical_block] = num_sharers
-3. On modification:
-   if ref_count > 1:
-       new_block = allocate_free_block()
-       copy(physical_blocks[original], physical_blocks[new_block])
-       update block_table entry
-       ref_count[original] -= 1
-\end{verbatim}
-
-\subsubsection{Block Size Trade-offs}
-\begin{itemize}
-    \item Larger blocks $\rightarrow$ Better GPU utilization, more internal fragmentation
-    \item Smaller blocks $\rightarrow$ Less waste, more overhead
-    \item Typical: 16 tokens (balances ~4% waste vs good parallelism)
-\end{itemize}
+\subsubsection{Trade-offs in Block Size}
+The choice of block size involves a trade-off. Larger blocks lead to better GPU utilization due to more contiguous memory access, but can increase internal fragmentation. Smaller blocks minimize memory waste but can increase the overhead of managing the block tables. A typical block size of 16 tokens has been found to be a good balance, resulting in low memory waste (around 4\%) while maintaining good parallelism.

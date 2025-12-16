@@ -1,170 +1,121 @@
-\section{Quantization Methodologies}
+\section{Quantization Methodologies for Large Language Models}
 
-\subsection{Mathematical Foundation of Quantization}
+\subsection{Mathematical Foundations of Quantization}
 
-Quantization maps high-precision floating-point values to lower-precision representations. For a weight tensor $\mathbf{W}$, the fundamental quantization operation is:
+Quantization is a process that maps high-precision floating-point values to a lower-precision data type. This reduction in numerical precision is a key strategy for compressing LLMs and accelerating their inference speed. For a given weight tensor $\mathbf{W}$, the fundamental affine quantization operation is defined as:
 
-\begin{equation*}\label{eq:quant_op}
-Q(w) = \Delta \cdot \text{round}(w/\Delta + z)
-\end{equation*}
+\begin{equation}\label{eq:quant_op}
+Q(w) = \Delta \cdot \text{round}\left(\frac{w}{\Delta} + z\right)
+\end{equation}
 
-Where:
-\begin{itemize}
-    \item $\Delta$ (delta) is the scale factor: $\Delta = (\max(W) - \min(W)) / (2^b - 1)$
-    \item $z$ is the zero-point for asymmetric quantization
-    \item $b$ is the target bit-width
-\end{itemize}
+In this equation, several parameters govern the transformation. The scale factor, $\Delta$, determines the step size of the quantization grid and is calculated based on the dynamic range of the tensor and the target bit-width, $b$, as $\Delta = (\max(\mathbf{W}) - \min(\mathbf{W})) / (2^b - 1)$. The zero-point, $z$, ensures that the value zero in the floating-point domain is precisely mapped to an integer in the quantized domain, which is particularly important for asymmetric quantization. Finally, $b$ represents the target bit-width, which dictates the number of discrete levels in the quantized representation.
 
-The layer-wise quantization objective for LLMs minimizes reconstruction error:
+The primary objective of quantization in the context of LLMs is to minimize the reconstruction error at the layer level. This is typically formulated as a least-squares problem:
 
-\begin{equation*}\label{eq:quant_loss}
-\text{argmin}_{\hat{W}} ||WX - \hat{W}X||^2_2
-\end{equation*}
+\begin{equation}\label{eq:quant_loss}
+\underset{\hat{\mathbf{W}}}{\text{argmin}} \| \mathbf{W}X - \hat{\mathbf{W}}X \|^2
+_2
+\end{equation}
 
-Where $W$ is the original weight matrix, $\hat{W}$ is the quantized weight matrix, and $X$ represents layer inputs from calibration data.
+Here, $\mathbf{W}$ is the original high-precision weight matrix, $\hat{\mathbf{W}}$ is its quantized counterpart, and $X$ represents a sample of layer inputs drawn from a calibration dataset. This objective function seeks to find a quantized matrix $\hat{\mathbf{W}}$ that produces an output as close as possible to the original matrix's output.
 
-\subsection{GPTQ Algorithm: Optimal Brain Quantization for LLMs}
+\subsection{GPTQ: Post-Training Quantization with Second-Order Information}
 
-\subsubsection{Theoretical Foundation}
-GPTQ builds on the Optimal Brain Quantization (OBQ) framework, which itself derives from Optimal Brain Surgeon (OBS). The key insight is that quantizing a weight introduces error that can be partially compensated by adjusting remaining unquantized weights.
+\subsubsection{Theoretical Framework}
+The GPTQ algorithm is a sophisticated post-training quantization (PTQ) method that extends the Optimal Brain Quantization (OBQ) framework. The central premise of OBQ-based methods is that the error introduced by quantizing a single weight can be partially compensated for by making small adjustments to the remaining, unquantized weights. This compensation is guided by second-order information about the loss function, which is captured by the Hessian matrix.
 
-\subsubsection{The OBQ Update Formula}
-When quantizing weight $w_q$, the optimal update $\delta_F$ for remaining weights $F$ is:
+\subsubsection{The Optimal Brain Quantization (OBQ) Update Rule}
+When a specific weight, $w_q$, is quantized, the optimal update, $\delta_F$, to be applied to the set of remaining unquantized weights, $F$, is given by:
 
-\begin{equation*}\label{eq:obq_update}
-\delta_F = -w_q \cdot (H_F)^{-1} \cdot h_{Fq} / [H^{-1}]_{qq}
-\end{equation*}
+\begin{equation}\label{eq:obq_update}
+\delta_F = -w_q \cdot (\mathbf{H}_F)^{-1} \cdot \mathbf{h}_{Fq} / [\mathbf{H}^{-1}]_{qq}
+\end{equation}
 
-Where:
-\begin{itemize}
-    \item $H = XX^T + \lambda I$ is the Hessian matrix (with regularization $\lambda$)
-    \item $h_{Fq}$ is the column of $H$ corresponding to the quantized weight
-    \item $[H^{-1}]_{qq}$ is the diagonal element of the inverse Hessian
-\end{itemize}
+The terms in this equation are defined as follows: $\mathbf{H} = XX^T + \lambda I$ is the Hessian matrix of the layer's reconstruction error, approximated using calibration data $X$ and stabilized with a small regularization term $\lambda I$. $\mathbf{h}_{Fq}$ represents the column of the Hessian that corresponds to the coupling between the weight being quantized, $w_q$, and the other weights in $F$. $[\mathbf{H}^{-1}]_{qq}$ is the diagonal element of the inverse Hessian corresponding to $w_q$.
 
-\subsubsection{GPTQ Key Innovations}
+\subsubsection{Key Algorithmic Innovations in GPTQ}
 
-\begin{enumerate}
-    \item \textbf{Arbitrary Order Quantization:} Unlike OBQ which greedily selects weights minimizing immediate error, GPTQ quantizes all rows in the same column order. Empirically, this produces equivalent results for large models while enabling massive parallelization.
+GPTQ introduces several modifications to the classic OBQ algorithm to make it scalable and efficient for LLMs. First, instead of greedily selecting weights based on minimizing immediate quantization error, GPTQ processes weights in a fixed column-by-column order. This simplification has been empirically shown to yield comparable results for large-scale models and is crucial for enabling parallel computation on modern hardware. Second, to improve computational efficiency, GPTQ processes columns in blocks (e.g., 128 columns at a time). The necessary updates to the remaining weights are accumulated and applied in a single batch operation at the end of each block. This strategy amortizes the cost of the update step and better utilizes the parallel processing capabilities of GPUs. Third, sequential updates to the Hessian can lead to an accumulation of numerical errors. To mitigate this, GPTQ employs a Cholesky decomposition of the inverse Hessian, which enhances the numerical stability of the algorithm during the quantization process, as shown in Equation \ref{eq:cholesky_reformulation}.
+\begin{equation}\label{eq:cholesky_reformulation}
+\mathbf{H}^{-1} = (\text{Chol}(\mathbf{H}^{-1}))^T \cdot \text{Chol}(\mathbf{H}^{-1})
+\end{equation}
 
-    \item \textbf{Lazy Batch Updates:} Instead of updating the Hessian after each weight, GPTQ processes blocks of B columns (typically B=128):
-    \begin{itemize}
-        \item Quantize B columns using current Hessian information
-        \item Batch-update remaining columns after processing the block
-        \item This improves GPU utilization by converting memory-bound operations to compute-bound
-    \end{itemize}
+\subsubsection{Algorithmic Pseudocode}
+\begin{algorithm}[H]
+\caption{GPTQ Algorithm}
+\begin{algorithmic}[1]
+\Require Weight matrix $\mathbf{W}$, inverse Hessian $\mathbf{H}_{\text{inv}}$, target bit-width $b$
+\Ensure Quantized weight matrix $\mathbf{W}_{\text{quant}}$
+\State Compute the Cholesky decomposition of $\mathbf{H}_{\text{inv}}$.
+\For{each column $j$ from 0 to $d_{\text{col}}$ in blocks of size $B$}
+    \For{each column within the current block}
+        \State Quantize the current column $j$: $\mathbf{w}_{\text{quant},j} = \text{quant}(\mathbf{w}_j, b)$.
+        \State Calculate the quantization error: $\delta_j = (\mathbf{w}_j - \mathbf{w}_{\text{quant},j}) / [\mathbf{H}_{\text{inv}}]_{jj}$.
+        \State Propagate the error to update the remaining columns in the block: $\mathbf{W}[:, j+1:] \leftarrow \mathbf{W}[:, j+1:] - \delta_j \cdot \mathbf{H}_{\text{inv}}[j, j+1:]$.
+    \EndFor
+    \State Apply a lazy batch update to all columns beyond the current block.
+\EndFor
+\State \textbf{return} $\mathbf{W}_{\text{quant}}$
+\end{algorithmic}
+\end{algorithm}
 
-    \item \textbf{Cholesky Reformulation:} For numerical stability, GPTQ uses Cholesky decomposition of the inverse Hessian:
-    \begin{equation*}\label{eq:cholesky_reformulation}
-H^{-1} = (\text{Chol}(H^{-1}))^T \cdot \text{Chol}(H^{-1})
-\end{equation*}
-    This eliminates accumulating numerical errors during sequential processing.
-\end{enumerate}
-
-\subsubsection{Algorithm Pseudocode}
-\begin{minted}{text}
-Input: Weight matrix W, inverse Hessian H_inv, sparsity/quantization target
-Output: Quantized weight matrix W_quant
-
-1. Compute Cholesky decomposition of H_inv
-2. For j = 0 to d_col in blocks of size B:
-   a. For each column in block:
-      - Quantize column j: w_quant_j = quant(w_j)
-      - Compute quantization error: delta_j = (w_j - w_quant_j) / [H_inv]_jj
-      - Update remaining columns in block: W[:,j+1:] -= delta_j * H_inv[j,j+1:]
-   b. Apply lazy batch update to columns beyond current block
-3. Return W_quant
-\end{minted}
-
-\subsubsection{Complexity}
-$O(d_{\text{col}} \cdot d_{\text{row}} \cdot d_{\text{col}}) = O(d^3_{\text{col}})$ per layer, with the inverse Hessian computation dominating at $O(d^3_{\text{col}})$.
+\subsubsection{Computational Complexity}
+The computational complexity of GPTQ is dominated by the calculation of the inverse Hessian, which is $O(d_{\text{col}}^3)$, and the subsequent quantization pass, which is $O(d_{\text{row}} \cdot d_{\text{col}}^2)$. This makes the overall complexity per layer approximately $O(d_{\text{col}}^3)$.
 
 \subsection{AWQ: Activation-Aware Weight Quantization}
 
-\subsubsection{Core Observation}
-Not all weights contribute equally to model outputs. AWQ identifies that approximately 0.1-1% of weight channels—those corresponding to large activation magnitudes—are "salient" and protecting them significantly reduces quantization error.
+\subsubsection{Core Insight}
+The central observation behind Activation-Aware Weight Quantization (AWQ) is that not all weights are equally important. A small fraction of weights (typically 0.1% to 1%) are considered "salient" because they are consistently multiplied by activations of large magnitude. Protecting these salient weights from significant quantization error can drastically improve the performance of the quantized model.
 
-\subsubsection{Salient Channel Identification}
-Unlike magnitude-based selection, AWQ uses activation statistics:
-\begin{equation*} Saliency(\text{channel}_i) = \text{mean}(|X[:,i]|) \cdot ||W[i,:]||
-\end{equation*}
-Channels with high saliency scores process more important features.
+\subsubsection{Identification of Salient Channels}
+AWQ identifies these critical weight channels not by their own magnitude, but by analyzing the statistics of the input activations. The saliency of a channel is determined by the product of the mean activation magnitude and the norm of the corresponding weights:
+\begin{equation}
+\text{Saliency}(\text{channel}_i) = \mathbb{E}[|X[:,i]|] \cdot \|W[i,:]\|
+\end{equation}
+Channels that exhibit high saliency scores are those that process the most influential features in the input data.
 
-\subsubsection{Scaling-Based Protection}
-Instead of mixed-precision (which is hardware-inefficient), AWQ scales salient channels before quantization:
+\subsubsection{Scaling-Based Channel Protection}
+To preserve the precision of these salient channels without resorting to mixed-precision representations (which can be inefficient on some hardware), AWQ employs a per-channel scaling technique. The key idea is to scale up the salient weights before quantization and, to maintain mathematical equivalence, scale down the corresponding activations during inference.
 
-For weight $w$ and input activation $x$, the output $y = w \cdot x$. If we scale:
-\begin{itemize}
-    \item $w' = s \cdot w$ (scale up weight)
-    \item $x' = x / s$ (scale down activation)
-\end{itemize}
+Given a weight $w$ and an input activation $x$, their product is $y = w \cdot x$. By introducing a scaling factor $s$, we can define a new weight $w' = s \cdot w$ and a new activation $x' = x / s$. The resulting product remains unchanged:
+\begin{equation}
+y' = w' \cdot x' = (s \cdot w) \cdot (x/s) = w \cdot x = y
+\end{equation}
 
-The output remains unchanged: $y' = w' \cdot x' = (s\cdot w) \cdot (x/s) = w \cdot x = y$
+\subsubsection{Analysis of Quantization Error}
+The benefit of this scaling becomes apparent when we analyze the quantization error. For a weight $w$ and a quantization step size $\Delta$, the error is bounded by:
+\begin{equation}
+\text{Error}(w) = |w - Q(w)| \leq \frac{\Delta}{2}
+\end{equation}
+However, for the scaled weight, the effective error, when scaled back to the original domain, is reduced:
+\begin{equation}
+\text{Error}(s \cdot w)_{\text{scaled back}} = \left|w - \frac{Q(s \cdot w)}{s}\right| \leq \frac{\Delta}{2s}
+\end{equation}
+By choosing a scaling factor $s > 1$ for the salient channels, the effective quantization error for these critical weights is proportionally reduced.
 
-\subsubsection{Quantization Error Analysis}
-For a weight $w$ with scale factor $s$ and quantization step $\Delta$:
-\begin{equation*} \text{Error}(w) = |w - Q(w)| \leq \Delta/2
-\end{equation*}
-\begin{equation*} \text{Error}(s\cdot w) \text{ scaled back} = |w - Q(s\cdot w)/s| \leq \Delta/(2s)
-\end{equation*}
+\subsubsection{Optimal Scale Determination}
+AWQ determines the optimal per-channel scaling factor, $s^*$, by performing a grid search that minimizes the layer's reconstruction error:
+\begin{equation}
+s^* = \underset{s}{\text{argmin}} \| Q(s \cdot \mathbf{W})(\mathbf{X}/s) - \mathbf{W}\mathbf{X} \|^2
+\end{equation}
+The search for $s$ is typically conducted over a small set of values, such as $\{1, 1.25, 1.5, \dots, 4\}$, for the identified salient channels.
 
-By choosing $s > 1$ for salient channels, the effective quantization error decreases proportionally.
+\subsubsection{Algorithmic Overview}
+The AWQ procedure begins by collecting activation statistics from a calibration dataset to identify the most salient weight channels (e.g., the top 1% based on activation magnitudes). For each salient channel $i$, it then searches for the optimal scaling factor $s_i$ that minimizes reconstruction error and applies the scaling transformation $W[i,:] \leftarrow s_i \cdot W[i,:]$. The inverse scaling factors ($1/s_i$) are fused into the preceding layer, so they can be absorbed during inference with no computational overhead. Finally, a standard group-wise quantization is applied to the transformed weight matrix.
 
-\subsubsection{Optimal Scale Search}
-AWQ searches for optimal per-channel scales using grid search:
-\begin{equation*} s^* = \text{argmin}_s ||Q(s\cdot W)(X/s) - W\cdot X||^2
-\end{equation*}
+\subsubsection{Principal Advantage}
+A key advantage of AWQ is its speed. Since it does not involve any backpropagation or complex weight reconstruction, it is significantly faster than methods like GPTQ, while often achieving comparable or even superior quantization performance.
 
-The search space is typically $s \in \{1, 1.25, 1.5, ..., 4\}$ for salient channels.
-
-\subsubsection{Algorithm}
-\begin{enumerate}
-    \item Collect activation statistics from calibration data
-    \item Identify salient channels (top 1% by activation magnitude)
-    \item For each salient channel $i$:
-    \begin{enumerate}
-        \item Search for optimal scale $s_i$ minimizing reconstruction error
-        \item Apply equivalent transformation: $W[i,:] *= s_i$
-    \end{enumerate}
-    \item Fuse inverse scales into adjacent layer (absorbed during inference)
-    \item Perform group-wise quantization on transformed weights
-\end{enumerate}
-
-\subsubsection{Key Advantage}
-AWQ requires no backpropagation or weight reconstruction, making it faster than GPTQ while achieving comparable or better quality.
-
-\subsection{NF4 Quantization: Information-Theoretically Optimal Data Type}
+\subsection{NF4: An Information-Theoretically Optimal Data Type}
 
 \subsubsection{Motivation}
-Pre-trained neural network weights follow approximately normal distributions. Standard uniform quantization levels waste representation capacity on regions with low probability density.
+Standard quantization schemes typically use a uniform distribution of quantization levels. However, the weights of pre-trained neural networks are known to follow a distribution that is approximately normal (Gaussian). A uniform quantization grid is therefore suboptimal, as it allocates representational capacity to values that have a low probability of occurring.
 
-\subsubsection{NF4 Construction}
-NF4 creates 16 quantization levels (4 bits) that are information-theoretically optimal for $N(0,1)$:
+\subsubsection{Construction of the NF4 Data Type}
+The 4-bit NormalFloat (NF4) data type is designed to be information-theoretically optimal for data with a standard normal distribution, $N(0,1)$. It defines 16 quantization levels that are not uniformly spaced but are instead positioned to represent the underlying distribution more accurately. The construction involves quantile estimation, bin centering, and an asymmetric representation. First, the quantiles of the standard normal distribution are computed. For a $k$-bit data type, the quantiles are given by $q_i = \Phi^{-1}\left(\frac{i}{2^k + 1}\right)$ for $i = 1, \dots, 2^k - 1$, where $\Phi^{-1}$ is the inverse of the cumulative distribution function (CDF) of the standard normal distribution. Second, the quantization bins are centered between adjacent quantiles to ensure that each bin represents an equal portion of the probability mass, $c_i = (q_i + q_{i+1}) / 2$. Finally, the levels are defined asymmetrically for positive and negative values to ensure an exact representation for zero, which is a critical value in many neural network operations.
 
-\begin{enumerate}
-    \item Compute quantiles of the standard normal distribution:
-    \begin{equation*}
-    q_i = \Phi^{-1}(i/(2^k + 1)) \text{ for } i = 1, ..., 2^k - 1
-    \end{equation*}
-    Where $\Phi^{-1}$ is the inverse CDF of $N(0,1)$
-
-    \item Center quantization bins between adjacent quantiles:
-    \begin{equation*}
-    c_i = (q_i + q_{i+1}) / 2
-    \end{equation*}
-
-    \item Ensure exact zero representation by creating asymmetric positive/negative ranges
-\end{enumerate}
-
-\subsubsection{NF4 Quantization Levels (normalized to [-1, 1])}
-\begin{verbatim}
-Negative: -1.0, -0.6962, -0.5251, -0.3949, -0.2844, -0.1848, -0.0911, 0.0
-Positive: 0.0, 0.0796, 0.1609, 0.2461, 0.3379, 0.4407, 0.5626, 0.7230, 1.0
-\end{verbatim}
+\subsubsection{Normalized NF4 Quantization Levels}
+When normalized to the range [-1, 1], the 16 levels of the NF4 data type are approximately: -1.0, -0.6962, -0.5251, -0.3949, -0.2844, -0.1848, -0.0911, 0.0 for the negative values, and 0.0, 0.0796, 0.1609, 0.2461, 0.3379, 0.4407, 0.5626, 0.7230, 1.0 for the positive values.
 
 \subsubsection{Quantization Procedure}
-\begin{enumerate}
-    \item Normalize weights to [-1, 1] using absolute maximum: $w_{\text{norm}} = w / \max(|W|)$
-    \item Find nearest NF4 level: $q = \text{argmin}_i |w_{\text{norm}} - \text{nf4\_levels}[i]|$
-    \item Store 4-bit index $q$ and scale factor $\max(|W|)$
-\end{enumerate}
+The procedure for quantizing a weight tensor to NF4 is as follows. First, the weight tensor is normalized to the range [-1, 1] using its absolute maximum value: $w_{\text{norm}} = w / \max(|\mathbf{W}|)$. Then, for each normalized weight, the nearest NF4 level is found by minimizing the absolute difference: $q = \text{argmin}_i |w_{\text{norm}} - \text{nf4\_levels}[i]|$. Finally, the 4-bit index $q$ is stored along with the 32-bit scale factor, $\max(|\mathbf{W}|)$, for de-quantization.

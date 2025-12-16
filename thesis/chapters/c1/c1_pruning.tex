@@ -1,75 +1,70 @@
-\section{Pruning Methodologies}
+\section{Pruning Methodologies for Model Compression}
 
-\subsection{SparseGPT: One-Shot Unstructured Pruning}
+Pruning is a family of techniques aimed at reducing model size and computational cost by removing redundant weights. This is typically achieved by setting a fraction of the weights to zero, resulting in a sparse model that can be executed more efficiently.
+
+\subsection{SparseGPT: A One-Shot Pruning Framework}
+
+SparseGPT is a one-shot pruning method, meaning it induces sparsity in a pre-trained model without requiring any subsequent fine-tuning. It is designed to efficiently find an optimal sparse representation of the weights that minimizes the impact on the model's output.
 
 \subsubsection{Problem Formulation}
-Given a fixed pruning mask $M$ (indicating which weights to zero), find optimal values for remaining weights that minimize layer output reconstruction error:
+The core objective of SparseGPT is, for a given pre-determined sparsity mask $M$, to find the optimal values for the remaining weights that minimize the layer's output reconstruction error. This can be expressed as:
 
-\begin{equation*} \text{argmin}_{W_M} ||W\cdot X - W_M\cdot X||^2_2
-\end{equation*}
+\begin{equation}
+\underset{\mathbf{W}_M}{\text{argmin}} \| \mathbf{W}X - \mathbf{W}_M X \|^2_2
+\end{equation}
 
-Where $W_M$ has zeros at positions specified by $M$.
+Here, $\mathbf{W}_M$ is the pruned weight matrix, which is constrained to have zeros at the positions indicated by the mask $M$.
 
-\subsubsection{The Row-Hessian Challenge}
-Each row of $W$ can have a different sparsity pattern, meaning each row requires a different masked Hessian inverse $(H_F)^{-1}$. Computing separate inverses for each row is prohibitively expensive for billion-parameter models.
+\subsubsection{The Challenge of Row-wise Hessian Computation}
+A significant challenge in solving this optimization problem is that each row of the weight matrix $\mathbf{W}$ can have a unique sparsity pattern. Consequently, a direct application of second-order optimization methods would require computing a different masked Hessian inverse, $(\mathbf{H}_F)^{-1}$, for each row. For models with billions of parameters, this is computationally infeasible.
 
-\subsubsection{SparseGPT Solution}
-The key insight is to process columns left-to-right with partial updates:
+\subsubsection{The SparseGPT Solution: Sequential Column Pruning}
+SparseGPT circumvents this issue with a key insight: by processing the weights in a column-by-column fashion, it is possible to reuse Hessian information across different rows. The algorithm proceeds as follows: when a weight in column $j$ and row $i$ is pruned, the optimal update for the remaining weights in columns greater than $j$ depends only on the sub-Hessian corresponding to those columns. This sub-Hessian is shared across all rows, irrespective of their individual sparsity patterns. By updating only the weights to the "right" of the current column, SparseGPT can efficiently propagate the error from pruning while reusing the same Hessian information.
 
-\begin{enumerate}
-    \item For column $j$ being pruned in row $i$:
-    \begin{itemize}
-        \item The optimal update for weights in columns $> j$ depends only on the sub-Hessian for those columns
-        \item This sub-Hessian is shared across all rows, regardless of their sparsity patterns
-    \end{itemize}
-
-    \item By updating only "rightward" weights after each column, SparseGPT reuses Hessian information across rows with different masks.
-\end{enumerate}
-
-\subsubsection{Algorithm}
-\begin{minted}{text}
-Input: Weight matrix W in R^{d_row x d_col}, Hessian H_inv, target sparsity p%
-Output: Sparse weight matrix W_sparse
-
-1. Precompute Cholesky decomposition of H_inv
-2. For j = 0 to d_col:
-   For each row i:
-     a. Determine if w_{ij} should be pruned (via mask selection)
-     b. If pruned: Set w_{ij} = 0
-        Else: Keep current value
-     c. Compute error: err = (w_{ij,original} - w_{ij}) / [H_inv]_{jj}
-     d. Update remaining weights: W[i, j+1:] -= err * H_inv[j, j+1:]
-3. Return W_sparse
-\end{minted}
+\subsubsection{Algorithmic Description}
+\begin{algorithm}[H]
+\caption{SparseGPT Algorithm}
+\begin{algorithmic}[1]
+\Require Weight matrix $\mathbf{W}$, inverse Hessian $\mathbf{H}_{\text{inv}}$, target sparsity $p$
+\Ensure Sparse weight matrix $\mathbf{W}_{\text{sparse}}$
+\State Precompute the Cholesky decomposition of the inverse Hessian, $\mathbf{H}_{\text{inv}}$.
+\For{each column $j$ from 0 to $d_{\text{col}}$}
+    \For{each row $i$}
+        \State Decide whether to prune the weight $w_{ij}$ based on a selection criterion.
+        \If{the weight is pruned}
+            \State Set $w_{ij} = 0$.
+        \EndIf
+        \State Compute the error introduced by pruning: $\text{err} = (w_{ij,\text{original}} - w_{ij}) / [\mathbf{H}_{\text{inv}}]_{jj}$.
+        \State Update the remaining weights in the row to compensate for this error: $\mathbf{W}[i, j+1:] \leftarrow \mathbf{W}[i, j+1:] - \text{err} \cdot \mathbf{H}_{\text{inv}}[j, j+1:]$.
+    \EndFor
+\EndFor
+\State \textbf{return} $\mathbf{W}_{\text{sparse}}$
+\end{algorithmic}
+\end{algorithm}
 
 \subsubsection{Adaptive Mask Selection}
-Rather than pre-determining the mask, SparseGPT selects which weights to prune adaptively:
-\begin{verbatim}
-For each block of B_s columns:
-  1. Compute OBS pruning criterion: epsilon_ij = |w_{ij}|^2 / [H_inv]_{jj}
-  2. Select lowest-error weights to achieve target sparsity
-  3. Prune selected weights and update remaining
-\end{verbatim}
+Instead of using a fixed, pre-determined mask, SparseGPT can adaptively select which weights to prune. This is done by evaluating the error that would be introduced by pruning each weight and then removing those that cause the least error. The criterion, derived from the Optimal Brain Surgeon framework, is:
+\begin{equation}
+\epsilon_{ij} = \frac{|w_{ij}|^2}{[\mathbf{H}_{\text{inv}}]_{jj}}
+\end{equation}
+Weights with the smallest $\epsilon_{ij}$ are pruned until the desired target sparsity is reached.
 
-\subsubsection{Semi-Structured Sparsity (N:M Patterns)}
-For 2:4 sparsity (2 zeros per 4 consecutive weights), SparseGPT modifies selection:
-\begin{verbatim}
-For each group of 4 consecutive weights:
-  Select 2 weights with lowest pruning error epsilon to preserve
-  Zero the other 2 weights
-\end{verbatim}
+\subsubsection{Support for Semi-Structured Sparsity}
+SparseGPT can also be adapted to generate semi-structured sparsity patterns, such as the N:M pattern (e.g., 2:4 sparsity), which are often required for hardware acceleration. In this case, the selection process is constrained: for each group of M consecutive weights, the N weights with the lowest pruning error are preserved, and the rest are pruned.
 
-\subsubsection{Complexity}
-$O(d^3_{\text{col}})$ for Hessian preparation + $O(d_{\text{col}} \cdot d_{\text{row}} \cdot d_{\text{col}})$ for pruning pass.
+\subsubsection{Computational Complexity}
+The complexity of SparseGPT is dominated by the Hessian preparation, which is $O(d_{\text{col}}^3)$, and the pruning pass itself, which is $O(d_{\text{row}} \cdot d_{\text{col}}^2)$.
 
-\subsection{Wanda: Pruning Without Weight Updates}
+\subsection{Wanda: A Simplified Pruning Criterion}
 
-\subsubsection{Simplified Criterion}
-Wanda (Weights AND Activations) prunes based on:
-\begin{equation*} \text{Importance}(w_{ij}) = |w_{ij}| \cdot ||X[:,j]||_2
-\end{equation*}
+Wanda (short for Weights AND Activations) is another one-shot pruning method that offers a much simpler and faster alternative to SparseGPT.
 
-Where $X[:,j]$ is the j-th input feature's activation across calibration samples.
+\subsubsection{The Wanda Importance Score}
+The core idea of Wanda is to prune weights based on a simple importance score that considers both the magnitude of the weight and the magnitude of its corresponding input activation. The importance of a weight $w_{ij}$ is defined as:
+\begin{equation}
+\text{Importance}(w_{ij}) = |w_{ij}| \cdot \|X[:,j]\|_2
+\end{equation}
+Here, $\|X[:,j]\|_2$ is the L2-norm of the $j$-th input feature's activations, computed over a calibration dataset. This metric identifies weights that have a large magnitude and are also applied to inputs that are frequently large, making them more influential.
 
-\subsubsection{No Reconstruction}
-Unlike SparseGPT, Wanda performs no weight updates after pruning—simply zeroing low-importance weights. This makes it significantly faster (minutes vs. hours) while achieving comparable results at 50% sparsity.
+\subsubsection{Pruning without Reconstruction}
+Unlike SparseGPT, Wanda does not perform any weight updates to compensate for the pruning error. It simply sets the weights with the lowest importance scores to zero. This simplification makes Wanda significantly faster—often completing in minutes rather than hours—while still achieving competitive results, particularly at moderate levels of sparsity (e.g., 50\%).

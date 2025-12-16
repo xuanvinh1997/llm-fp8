@@ -11,7 +11,7 @@ All experiments were conducted on NVIDIA H100 GPUs, each equipped with 80 GB of 
 Our core contribution lies in the application and evaluation of a layer-wise FP8 training strategy. This section describes how we integrated FP8 capabilities into the standard Llama architecture and the specific precision recipes we tested.
 
 \subsection{Model Conversion to Transformer Engine}
-To enable FP8 training, we converted the standard Hugging Face Llama models to use Transformer Engine's specialized layers. This was achieved by dynamically replacing the `LlamaDecoderLayer` with a custom `TELlamaDecoderLayer`. This custom layer substitutes standard PyTorch modules with their TE counterparts, namely `te.pytorch.MultiheadAttention` and `te.pytorch.LayerNormMLP`. This modular replacement allows us to introduce FP8 computation via TE's `fp8_autocast` context manager while preserving the original model weights and architecture.
+To enable FP8 training, we converted the standard Hugging Face Llama models to use Transformer Engine's specialized layers. This was achieved by dynamically replacing the `LlamaDecoderLayer` with a custom `TELlamaDecoderLayer`. This custom layer substitutes standard PyTorch modules with their TE counterparts, namely `te.pytorch.MultiheadAttention` and `te.pytorch.LayerNormMLP`. This modular replacement allows us to introduce FP8 computation via TE's `fp8\_autocast` context manager while preserving the original model weights and architecture.
 
 \subsection{FP8 Precision Strategies}
 We compared three distinct precision strategies to isolate the effects of our layer-wise approach. The first, our \textbf{BF16 Baseline}, represents a standard mixed-precision training regime where all weights, activations, and gradients are in BFloat16 format, with optimizer states maintained in FP32. This serves as our primary reference for accuracy and convergence.
@@ -31,7 +31,7 @@ After training, the model checkpoints were evaluated for their inference perform
 
 To assess performance, we benchmarked the models in three different numerical formats on an NVIDIA H100 GPU. The first setting used the native \textbf{FP8} precision from training. The second setting involved up-casting the FP8 weights to \textbf{FP16}, a common half-precision baseline. The third setting, which served as a full-precision reference, involved up-casting the weights to \textbf{FP32}.
 
-For each setting, we measured token throughput (tokens per second) and peak GPU memory consumption. The results of this analysis, presented in Chapter \ref{chap:results}, demonstrate the practical benefits of FP8 training when deployed in a production-like inference scenario.
+For each setting, we measured token throughput (tokens per second) and peak GPU memory consumption. The results of this analysis, presented in Chapter \ref{chap:experiments_and_evaluation}, demonstrate the practical benefits of FP8 training when deployed in a production-like inference scenario.
 
 \subsection{FP8 Precision Strategies}
 We compared three distinct precision strategies to isolate the effects of our layer-wise approach. The first, our \textbf{BF16 Baseline}, represents a standard mixed-precision training regime where all weights, activations, and gradients are in BFloat16 format, with optimizer states maintained in FP32. This serves as our primary reference for accuracy and convergence.
@@ -51,4 +51,4 @@ After training, the model checkpoints were evaluated for their inference perform
 
 To assess performance, we benchmarked the models in three different numerical formats on an NVIDIA H100 GPU. The first setting used the native \textbf{FP8} precision from training. The second setting involved up-casting the FP8 weights to \textbf{FP16}, a common half-precision baseline. The third setting, which served as a full-precision reference, involved up-casting the weights to \textbf{FP32}.
 
-For each setting, we measured token throughput (tokens per second) and peak GPU memory consumption. The results of this analysis, presented in Chapter \ref{chap:results}, demonstrate the practical benefits of FP8 training when deployed in a production-like inference scenario.
+For each setting, we measured token throughput (tokens per second) and peak GPU memory consumption. The results of this analysis, presented in Chapter \ref{chap:experiments_and_evaluation}, demonstrate the practical benefits of FP8 training when deployed in a production-like inference scenario.

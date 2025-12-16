@@ -1,38 +1,38 @@
-\section{Implementation Guidelines}
+\section{Practical Implementation and Strategy}
 
-\subsection{Framework Selection by Target}
+The selection of an appropriate optimization strategy depends on a multitude of factors, including the target hardware platform, the specific constraints of the application (e.g., memory, latency), and the desired trade-off between model performance and computational cost. This section provides a structured guide to navigating these decisions.
 
-\begin{tabular}{l|l|l}
-\textbf{Target Platform} & \textbf{Recommended Stack} & \textbf{Key Techniques} \\
+\subsection{Framework and Library Selection by Deployment Target}
+
+The ecosystem of tools for LLM optimization is diverse and rapidly evolving. The choice of framework is often dictated by the target deployment environment, as outlined in Table \ref{tab:frameworks}.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|l|l|p{5cm}|}
+\toprule
+\textbf{Platform} & \textbf{Framework/Stack} & \textbf{Key Technologies} \\
+\midrule
+NVIDIA Data Center & TensorRT-LLM, vLLM & FP8 precision, PagedAttention, continuous batching, structured sparsity. \\
 \hline
-NVIDIA Datacenter & TensorRT-LLM + vLLM & FP8, PagedAttention, continuous batching \\
-NVIDIA Consumer & ExLlamaV2 or llama.cpp & GPTQ/EXL2, Flash-Attn \\
-Apple Silicon & MLX & 4-bit native, unified memory \\
-CPU-only & llama.cpp & GGUF Q4\_K\_M, AVX-512/AMX \\
-Mobile & MLC-LLM & INT4, NPU delegation \\
+NVIDIA Consumer GPUs & ExLlamaV2, llama.cpp & GPTQ/EXL2 4-bit quantization, FlashAttention implementations. \\
+\hline
+Apple Silicon (M-series) & MLX, llama.cpp & Native 4-bit quantization, unified memory architecture, Metal performance shaders. \\
+\hline
+CPU (x86-64 with AVX) & llama.cpp, OpenVINO & GGUF format (e.g., Q4\_K\_M), AVX-512/AMX instruction sets for accelerated computation. \\
+\hline
+Mobile and Edge Devices & MLC-LLM, TFLite & INT4/INT8 quantization, delegation of operations to specialized hardware like NPUs or DSPs. \\
+\bottomrule
 \end{tabular}
+\caption{Recommended optimization stacks for various hardware platforms.}
+\label{tab:frameworks}
+\end{table}
 
-\subsection{Quantization Selection}
-\begin{verbatim}
-Decision tree:
-1. Is accuracy critical? 
-   -> Yes: Q8_0 or AWQ INT4
-   -> No: Continue
+\subsection{A Decision Framework for Quantization}
 
-2. Is memory severely constrained?
-   -> Yes: Q3_K_M or IQ3_XXS
-   -> No: Q4_K_M or Q5_K_M
+The choice of a quantization method involves a complex trade-off between accuracy, memory footprint, and quantization speed. The decision process begins with an assessment of the primary constraints. When maintaining the highest possible accuracy is the paramount concern, higher-precision formats such as 8-bit (e.g., Q8\_0) or sophisticated 4-bit methods like AWQ are preferable. Conversely, in environments where memory is severely constrained, such as mobile devices, developers must accept a reduction in accuracy by utilizing aggressive quantization to 3-bit or even 2-bit formats (e.g., Q3\_K\_M, IQ2\_XXS). Alternatively, if serving throughput is the main priority, methods that facilitate rapid application and possess efficient inference kernels—such as AWQ combined with a serving framework like vLLM—emerge as strong candidates.
 
-3. Is serving throughput priority?
-   -> Yes: AWQ (fast quant) + vLLM
-   -> No: GPTQ (slightly better accuracy)
-\end{verbatim}
+Once constraints are established, specific method selection generally gravitates toward 4-bit quantization as the industry standard for balancing accuracy and memory savings. While methods like GPTQ offer marginally better accuracy, they are computationally intensive to apply; in contrast, AWQ is faster and often yields comparable results. For use cases demanding the absolute smallest memory footprint, formats like GGUF's `Q4\_K\_M` or `Q5\_K\_M` provide an optimal compromise between compression and quality, and benefit from widespread support in CPU-focused frameworks.
 
-\subsection{Fine-tuning Decision}
-\begin{verbatim}
-Memory available vs Model size:
-- >4x model size: Full fine-tuning feasible
-- 2-4x model size: LoRA with BF16 base
-- 1-2x model size: QLoRA required
-- <1x model size: Gradient checkpointing + QLoRA
-\end{verbatim}
+\subsection{A Decision Framework for Fine-Tuning}
+
+The choice between full fine-tuning and parameter-efficient methods is principally determined by the available GPU memory relative to the model size in a 16-bit format. Full fine-tuning is generally only feasible when the available memory exceeds four times the model size, though it remains computationally expensive. When memory capacity falls between two and four times the model size, LoRA applied to a base model in a 16-bit format (e.g., BF16) serves as a suitable option. For tighter constraints where memory is only one to two times the model size, QLoRA becomes necessary, necessitating the use of a 4-bit quantized base model. Finally, in environments where memory capacity is less than the model size itself, the most aggressive optimization techniques are required, combining QLoRA with gradient checkpointing to minimize activation memory.

@@ -1,98 +1,79 @@
 \section{Parameter-Efficient Fine-Tuning Methodologies}
 
+Full fine-tuning of large language models is often computationally prohibitive due to the immense memory required to store the model's weights, gradients, and optimizer states. Parameter-Efficient Fine-Tuning (PEFT) methods address this by updating only a small subset of the model's parameters, significantly reducing the resource requirements.
+
 \subsection{LoRA: Low-Rank Adaptation}
 
 \subsubsection{Mathematical Foundation}
-The intrinsic dimensionality hypothesis suggests weight updates during fine-tuning lie in a low-dimensional subspace.
+The Low-Rank Adaptation (LoRA) technique is motivated by the hypothesis that the change in weights during model adaptation has a low "intrinsic rank." This suggests that the weight updates can be effectively represented in a much lower-dimensional subspace.
 
 \subsubsection{Formulation}
-For a pre-trained weight matrix $W_0 \in R^{d \times k}$, LoRA parameterizes the update as:
-\begin{equation*} W = W_0 + \Delta W = W_0 + B \cdot A
-\end{equation*}
-Where: $B \in R^{d \times r}, A \in R^{r \times k}, r \ll \min(d,k)$
+For a pre-trained weight matrix $\mathbf{W}_0 \in \mathbb{R}^{d \times k}$, LoRA introduces a low-rank decomposition to represent the update, $\Delta \mathbf{W}$. The modified weight matrix, $\mathbf{W}$, is then:
+\begin{equation}
+\mathbf{W} = \mathbf{W}_0 + \Delta \mathbf{W} = \mathbf{W}_0 + \mathbf{B}\mathbf{A}
+\end{equation}
+where $\mathbf{B} \in \mathbb{R}^{d \times r}$ and $\mathbf{A} \in \mathbb{R}^{r \times k}$, with the rank $r \ll \min(d, k)$. During fine-tuning, $\mathbf{W}_0$ is kept frozen, and only the matrices $\mathbf{A}$ and $\mathbf{B}$ are trained.
 
-\subsubsection{Forward Pass}
-\begin{equation*} h = W_0 \cdot x + (B \cdot A) \cdot x = W_0 \cdot x + B \cdot (A \cdot x)
-\end{equation*}
+\subsubsection{Forward Pass Modification}
+The forward pass is modified to incorporate the low-rank update. For an input $x$, the output $h$ is computed as:
+\begin{equation}
+h = \mathbf{W}_0 x + (\mathbf{B}\mathbf{A})x = \mathbf{W}_0 x + \mathbf{B}(\mathbf{A}x)
+\end{equation}
+The computation is grouped as $\mathbf{B}(\mathbf{A}x)$ to maintain computational efficiency.
 
-\subsubsection{Initialization}
-\begin{itemize}
-    \item A: Random Gaussian initialization
-    \item B: Zero initialization ($\Delta W = 0$ at start, preserving pre-trained behavior)
-\end{itemize}
+\subsubsection{Initialization Strategy}
+The LoRA matrices are carefully initialized to preserve the pre-trained model's performance at the beginning of fine-tuning. $\mathbf{A}$ is initialized with random values drawn from a Gaussian distribution, while $\mathbf{B}$ is initialized to all zeros. This ensures that the initial update, $\Delta \mathbf{W}$, is zero, and the model's behavior is identical to the pre-trained model at the start of the training process.
 
 \subsubsection{Scaling Factor}
-\begin{equation*} h = W_0 \cdot x + (\alpha/r) \cdot B \cdot A \cdot x
-\end{equation*}
-Where $\alpha$ is a hyperparameter controlling adaptation strength. Setting $\alpha = r$ at the start of experiments allows changing $r$ without re-tuning learning rate.
+A scaling factor, $\alpha$, is often introduced to control the magnitude of the adaptation:
+\begin{equation}
+h = \mathbf{W}_0 x + \frac{\alpha}{r} (\mathbf{B}\mathbf{A})x
+\end{equation}
+Here, $\alpha$ is a hyperparameter that modulates the strength of the LoRA update. Setting $\alpha = r$ initially is a common practice, as it decouples the learning rate from the choice of rank $r$.
 
-\subsubsection{Parameter Reduction}
-\begin{verbatim}
-Full fine-tuning: d x k parameters
-LoRA: r x (d + k) parameters
+\subsubsection{Reduction in Trainable Parameters}
+The number of trainable parameters is significantly reduced with LoRA. While full fine-tuning requires updating $d \times k$ parameters, LoRA only updates $r \times (d + k)$ parameters. For a typical transformer layer where $d \approx k$, the reduction factor is approximately $d / (2r)$. For instance, with $d=k=4096$ and a rank of $r=8$, LoRA achieves a 256-fold reduction in trainable parameters.
 
-Reduction factor: dk / (r(d+k)) approx d/(2r) for d approx k
-Example: d=k=4096, r=8 -> 256x reduction
-\end{verbatim}
+\subsubsection{Typical Target Modules}
+LoRA is most commonly applied to the weight matrices within the attention mechanism, as these are often the most critical for task-specific adaptation. These include the query, key, value, and output projections ($W_q, W_k, W_v, W_o$).
 
-\subsubsection{Target Modules}
-Typically applied to attention projections:
-\begin{itemize}
-    \item Query ($W_q$): Most impactful
-    \item Value ($W_v$): Second most impactful
-    \item Key ($W_k$): Less impact
-    \item Output ($W_o$): Moderate impact
-    \item FFN layers: Useful for some tasks
-\end{itemize}
+\subsubsection{Inference Performance}
+For inference, the trained LoRA matrices can be merged with the original weights:
+\begin{equation}
+\mathbf{W}_{\text{deployed}} = \mathbf{W}_0 + \frac{\alpha}{r} \mathbf{B}\mathbf{A}
+\end{equation}
+This means that LoRA introduces no additional latency during inference, as the adapter is fully absorbed into the base model.
 
-\subsubsection{Merging for Inference}
-\begin{equation*} W_{\text{deployed}} = W_0 + (\alpha/r) \cdot B \cdot A
-\end{equation*}
-No additional inference latency—adapters are absorbed into base weights.
+\subsection{QLoRA: Quantized Low-Rank Adaptation}
 
-\subsection{QLoRA: Quantized LoRA}
+QLoRA further reduces the memory footprint of fine-tuning by combining LoRA with quantization. It introduces three key innovations that enable the fine-tuning of extremely large models on a single GPU.
 
-\subsubsection{Three Key Innovations}
+\subsubsection{Core Innovations of QLoRA}
 
-\paragraph{1. NF4 Base Model Quantization}
-Store frozen base model in 4-bit NF4, dequantize on-the-fly for computation:
-\begin{verbatim}
-Compute: Y = dequant(W_NF4) * X + B*A*X
-         = (scale * nf4_lookup[indices]) * X + B*A*X
+4-bit NF4 Base Model Quantization\\
+The frozen, pre-trained base model is quantized to the 4-bit NormalFloat (NF4) data type. During the forward pass, the weights are de-quantized on-the-fly to a higher precision (typically 16-bit BrainFloat, BF16) for computation, as shown in the equation $Y = \text{dequant}(W_{\text{NF4}}) \cdot X + (\mathbf{B}\mathbf{A})X$. This drastically reduces the memory required to store the base model, from 16 or 32 bits per parameter to approximately 4.5 bits per parameter (including quantization constants).
+Double Quantization\\
+To further reduce the memory overhead, QLoRA introduces "double quantization." The quantization constants themselves (e.g., the 32-bit scale factors for each group of weights) are also quantized. This second level of quantization typically uses an 8-bit representation, further reducing the memory footprint by approximately 0.3-0.5 bits per parameter.
+Paged Optimizers\\
+Fine-tuning with gradient checkpointing can still lead to memory spikes that exceed GPU capacity. QLoRA leverages paged optimizers, which use NVIDIA's unified memory feature to automatically page optimizer states to CPU RAM when GPU memory is exhausted. This process is transparent to the user and allows for the fine-tuning of much larger models than would otherwise be possible.
 
-Storage: 4 bits/weight + 32-bit scale per group (e.g., 64 weights)
-Compute: BF16 precision
-\end{verbatim}
+\subsubsection{Memory Footprint Comparison}
+The following table illustrates the dramatic memory savings achieved by QLoRA for a 65-billion-parameter model:
 
-\paragraph{2. Double Quantization}
-Quantize the quantization constants themselves:
-\begin{verbatim}
-Standard: 32-bit scale per group of 64 weights -> 32/64 = 0.5 bits/weight overhead
-Double quant: 8-bit scale with 256-group second-level quantization
-             -> 8/64 + 32/256 = 0.125 + 0.125 = 0.25 bits/weight
-Savings: ~0.37 bits/weight (approx 3GB for 65B model)
-\end{verbatim}
-
-\paragraph{3. Paged Optimizers}
-Handle memory spikes during gradient checkpointing:
-\begin{verbatim}
-When GPU memory exhausted:
-1. CUDA unified memory pages optimizer states to CPU
-2. Computation continues with automatic page faults
-3. States paged back on access
-
-No code changes required-transparent to training loop
-\end{verbatim}
-
-\subsubsection{Memory Breakdown (65B model)}
-\begin{tabular}{l|l|l}
-\textbf{Component} & \textbf{Full FT} & \textbf{QLoRA} \\
-\hline
-Base model weights & 130GB & ~16GB (4-bit) \\
-Gradients & 130GB & 0 (frozen base) \\
-Optimizer states & 260GB & ~0.5GB (LoRA only) \\
-Activations & Variable & ~4GB (checkpointing) \\
-LoRA adapters & N/A & ~0.5GB \\
-\hline
-Total & >520GB & ~21GB \\
+\begin{table}[H]
+\centering
+\begin{tabular}{l|c|c}
+\toprule
+\textbf{Component} & \textbf{Full FT (BF16)} & \textbf{QLoRA} \\
+\midrule
+Base model weights & 260 GB & ~33 GB (4-bit) \\
+Gradients & 260 GB & 0 (frozen base) \\
+Optimizer states (Adam) & 520 GB & ~0.5 GB (LoRA only) \\
+Activations (checkpointed) & Variable & ~4 GB \\
+LoRA adapters & N/A & ~0.5 GB \\
+\midrule
+\textbf{Total (Approx.)} & \textbf{> 1 TB} & \textbf{~38 GB} \\
+\bottomrule
 \end{tabular}
+\caption{Approximate memory requirements for fine-tuning a 65B model.}
+\end{table}

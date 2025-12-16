@@ -1,79 +1,76 @@
-\section{Speculative Decoding Methodology}
+\section{Accelerating Inference with Speculative Decoding}
 
-\subsection{Draft-Verify Framework}
+\subsection{The Draft-and-Verify Framework}
 
 \subsubsection{Motivation}
-Autoregressive generation is memory-bandwidth bound. A single forward pass reads all model weights (~TB) to generate one token. The GPU compute is vastly underutilized.
+The process of autoregressive generation in large language models is inherently sequential and is typically constrained by memory bandwidth. For each token generated, the entire model, which can be hundreds of gigabytes in size, must be read from memory. This leaves the powerful computational units of the GPU largely underutilized. Speculative decoding is a technique designed to ameliorate this by generating multiple tokens in parallel, thereby improving hardware efficiency.
 
 \subsubsection{Core Algorithm}
-\begin{verbatim}
-Input: Draft model M_d (small, fast), Target model M_t (large, accurate)
-       Speculation length gamma
+Speculative decoding employs a small, fast "draft" model, $M_d$, to generate a sequence of candidate tokens, which are then verified in a single parallel pass by the large, accurate "target" model, $M_t$.
 
-1. Draft phase: Generate gamma candidate tokens using M_d
-   x_tilde_1, x_tilde_2, ..., x_tilde_gamma ~ M_d(prefix)
+The algorithm proceeds as follows:
+\begin{algorithm}[H]
+\caption{Speculative Decoding}
+\begin{algorithmic}[1]
+\Require Draft model $M_d$, Target model $M_t$, Speculation length $\gamma$, Prefix sequence $p$
+\Ensure Generated sequence of tokens
+\Statex
+\Procedure{SpeculativeDecode}{$p, \gamma$}
+    \State \textit{Draft Phase}
+    \State Generate $\gamma$ candidate tokens using the draft model:
+    \State $\tilde{x}_1, \dots, \tilde{x}_\gamma \leftarrow M_d.\text{generate}(p, \text{length}=\gamma)$
+    \Statex
+    \State \textit{// Verification Phase}
+    \State Compute target model probabilities for all candidates in parallel:
+    \State $p_1, \dots, p_{\gamma+1} \leftarrow M_t(p, \tilde{x}_1, \dots, \tilde{x}_\gamma)$
+    \Statex
+    \State \textit{// Acceptance/Rejection Sampling}
+    \For{$i = 1$ to $\gamma$}
+        \State $q_i \leftarrow M_d(\tilde{x}_i | p, \tilde{x}_1, \dots, \tilde{x}_{i-1})$
+        \State $p_i \leftarrow M_t(\tilde{x}_i | p, \tilde{x}_1, \dots, \tilde{x}_{i-1})$
+        \If{$\text{random}() < \min(1, p_i / q_i)$}
+            \State Accept $\tilde{x}_i$ and continue.
+        \Else
+            \State Reject $\tilde{x}_i$, resample a token from a modified distribution, and break.
+        \EndIf
+    \EndFor
+    \Statex
+    \State \textit{// Output}
+    \State \textbf{return} sequence of accepted tokens plus the final token.
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
 
-2. Verify phase: Run M_t on all gamma+1 positions in parallel
-   p_1, p_2, ..., p_{gamma+1} = M_t(prefix, x_tilde_1, ..., x_tilde_gamma)
+\subsubsection{Theoretical Guarantee of Distributional Equivalence}
+A crucial property of speculative decoding is that the generated text is guaranteed to follow the exact same distribution as the target model. This is ensured by the use of a modified rejection sampling scheme. The probability of accepting a drafted token $x$ is:
+\begin{equation}
+P(\text{accept } x) = \min\left(1, \frac{p(x)}{q(x)}\right) \cdot q(x) = \min(q(x), p(x))
+\end{equation}
+If a token is rejected, a new token is sampled from a residual distribution, which corrects for the mismatch between the draft and target models' distributions.
 
-3. Accept/Reject via rejection sampling:
-   For i = 1 to gamma:
-     q_i = M_d(x_tilde_i | prefix, x_tilde_1, ..., x_tilde_{i-1})  # Draft probability
-     p_i = M_t(x_tilde_i | prefix, x_tilde_1, ..., x_tilde_{i-1})  # Target probability
-     
-     if random() < min(1, p_i/q_i):
-       Accept x_tilde_i, continue
-     else:
-       Reject x_tilde_i, resample from residual distribution
-       Break (discard remaining draft tokens)
+\subsubsection{Expected Number of Accepted Tokens}
+The efficiency of speculative decoding is determined by the number of drafted tokens that are accepted in each cycle. The expected number of accepted tokens is given by:
+\begin{equation}
+E[\text{accepted}] = \sum_{i=1}^{\gamma} \prod_{j=1}^{i} \alpha_j
+\end{equation}
+where $\alpha_j = \sum_x \min(p_j(x), q_j(x))$ is the acceptance rate at position $j$, which represents the total variational distance between the draft and target distributions at that step.
 
-4. Return accepted tokens + one target-sampled token
-\end{verbatim}
+\subsubsection{Analysis of Speedup}
+The theoretical speedup of speculative decoding depends on the relative cost of the draft and target models and the acceptance rate. Let $c$ be the ratio of the cost of a forward pass of the draft model to that of the target model, $c = \text{cost}(M_d) / \text{cost}(M_t)$. To generate $\gamma$ tokens, standard decoding requires $\gamma$ forward passes of the target model. In contrast, speculative decoding requires $\gamma$ forward passes of the draft model and one forward pass of the target model, for a total cost of $\gamma c + 1$. The speedup is therefore approximately proportional to the number of accepted tokens divided by the cost of the speculative cycle.
 
-\subsubsection{Rejection Sampling Guarantee}
-The accepted sequence follows the exact target model distribution:
-\begin{equation*} P(\text{accept } x) = \min(1, p(x)/q(x)) \cdot q(x) = \min(q(x), p(x)) 
-\end{equation*}
-\begin{equation*} P(\text{resample from residual}) = \sum_x \max(0, p(x) - q(x)) 
-\end{equation*}
+\subsection{EAGLE: Speculation at the Feature Level}
 
-\subsubsection{Expected Accepted Tokens}
-\begin{equation*} E[\text{accepted}] = \sum_{i=1}^{\gamma} \prod_{j=1}^{i} \alpha_j 
-\end{equation*}
-Where $\alpha_j = \sum_x \min(p_j(x), q_j(x))$ is the acceptance rate at position $j$.
+\subsubsection{Core Innovation}
+The EAGLE (Extrapolative-based Autoregressive Generation) method introduces an alternative to using a separate draft model. Instead, it predicts future token distributions by extrapolating from the target model's own internal hidden states.
 
-\subsubsection{Speedup Analysis}
-Let $c = \text{cost}(M_d)/\text{cost}(M_t)$ be the relative draft model cost.
-\begin{verbatim}
-Standard decoding: gamma target forward passes
-Speculative decoding: gamma draft passes + 1 target pass = gamma*c + 1
+\subsubsection{Architectural Design}
+EAGLE integrates a lightweight, autoregressive head into the target model's architecture. It extracts the feature vector, $f_t$, from a penultimate layer of the target model (e.g., the output of the second-to-last transformer block). A small autoregressive head then predicts the feature vector for the next token, $f_{\text{tilde}_{t+1}} = \text{EAGLE\_head}(f_t, \text{embedding}(x_t))$. This predicted feature vector is then passed to the original model's language model head to generate the logits for the next token: $\text{logits} = M_t.\text{lm\_head}(f_{\text{tilde}_{t+1}})$.
 
-Speedup = gamma / (gamma*c + 1) * E[accepted] / gamma
-        ~ (1 - c) * acceptance_rate / (1 + c*gamma)
-\end{verbatim}
+\subsubsection{Training Objective}
+The EAGLE head is trained to minimize a loss function that combines a regression loss on the predicted feature vectors and a cross-entropy loss on the final token predictions:
+\begin{equation}
+\text{Loss} = \sum_t \|f_{t+1} - \text{EAGLE\_head}(f_t, \text{emb}(x_t))\|^2 + \text{CE}(\text{logits}, x_{t+1})
+\end{equation}
 
-\subsection{EAGLE: Feature-Level Speculation}
-
-\subsubsection{Innovation}
-Instead of using a separate draft model, EAGLE predicts from the target model's own hidden states.
-
-\subsubsection{Architecture}
-\begin{enumerate}
-    \item Extract feature from second-to-last layer: $f_t = M_t.\text{layer}[-2](x)$
-    \item Lightweight autoregressive head predicts next features:
-    $f_{\text{tilde}_{t+1}} = \text{EAGLE\_head}(f_t, \text{embedding}(x_t))$
-    \item Project to vocabulary: $\text{logits} = M_t.\text{lm\_head}(f_{\text{tilde}_{t+1}})$ 
-\end{enumerate}
-
-\subsubsection{Training}
-\begin{equation*} \text{Loss} = \sum_t ||f_{t+1} - \text{EAGLE\_head}(f_t, \text{emb}(x_t))||^2 + \text{CE}(\text{logits}, x_{t+1}) 
-\end{equation*}
-
-\subsubsection{EAGLE-2 Dynamic Trees}
-Rather than linear speculation, EAGLE-2 builds draft trees based on confidence:
-\begin{enumerate}
-    \item Generate multiple candidates per position based on top-k
-    \item Expand high-confidence branches more deeply
-    \item Verify entire tree in single target pass using tree attention mask
-    \item Accept longest valid path
-\end{enumerate}
+\subsubsection{EAGLE-2: Dynamic Tree-Based Speculation}
+A further enhancement, EAGLE-2, moves from linear speculation to a more dynamic, tree-based approach. At each position, multiple candidate tokens are generated based on the top-k predictions. Branches of the speculation tree that correspond to high-confidence predictions are expanded more deeply. The entire tree of candidate tokens is then verified in a single forward pass of the target model, using a specially designed tree attention mask. The longest path in the tree that is accepted by the rejection sampling process is chosen as the output. This tree-based approach allows for a more flexible and potentially more efficient exploration of the possible future token sequences.

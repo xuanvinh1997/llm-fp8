@@ -1,13 +1,9 @@
 {
   "jobname": "thesis",
   "md5": "2EF71E68B4AD97F630480BCEBC1842FB",
-  "timestamp": "20251201133804",
+  "timestamp": "20251216112757",
   "cachefiles": [
     "1BC89051E2ABED9EA4CF75B080FCF8E9.highlight.minted",
-    "43B1AC6C5169C579D2AD82D704587399.highlight.minted",
-    "51F2551A60C1268C13E1074C6E7E7297.highlight.minted",
-    "57486BEA778842D862711C088529E256.highlight.minted",
-    "72FC29033C96BBB1082A64154BD59707.highlight.minted",
     "_2EF71E68B4AD97F630480BCEBC1842FB.index.minted",
     "default.style.minted"
   ]
