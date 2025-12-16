@@ -50,14 +50,14 @@ Better gradient propagation in >100-layer Transformers; mitigates dying-ReLU eff
 Low computational overhead &
 Adds only one sigmoid and element-wise product, fully fuseable in CUDA/TE kernels. \\
 Empirical gains &
-Adopted by PaLM, LLaMA-2, Qwen-2.5, DeepSeek, showing \mbox{+0.3–0.5} BLEU on WMT-En$\to$De and lower cross-entropy vs.\ GELU. \\ \bottomrule
+Adopted by PaLM \cite{chowdhery2023palm}, LLaMA-2 \cite{touvron2023llama}, Qwen-2.5 \cite{qwen25}, DeepSeek \cite{deepseekv3}, showing \mbox{+0.3–0.5} BLEU on WMT-En$\to$De and lower cross-entropy vs.\ GELU. \\ \bottomrule
 \end{tabular}
 \end{center}
 
 \subsection{Implementation note.}
 SwiGLU is memory- and compute-friendly: a single fused kernel can realise
 Eqs.~\eqref{eq:swiglu} in mixed precision (BF16/FP8).  
-Support ships with \texttt{FlashAttention\,2}, \texttt{Transformer-Engine}, and
+Support ships with \texttt{FlashAttention\,2} \cite{dao2023flashattention2}, \texttt{Transformer-Engine}, and
 recent PyTorch \texttt{torch.\allowbreak nn.\allowbreak SiLU} + custom CUDA extensions.
 
 \subsection{When to prefer alternatives.}

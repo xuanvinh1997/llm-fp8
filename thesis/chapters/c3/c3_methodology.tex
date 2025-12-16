@@ -4,7 +4,7 @@
 This chapter details the technical methodology employed to implement and evaluate layer-wise 8-bit floating-point (FP8) training for large language models. Our approach is designed to systematically assess the impact of selective precision on training stability, performance, and final model quality. We describe the hardware and software platform used, the process of converting models to support FP8, and the specific precision strategies that were tested.
 
 \section{Hardware and Software Platform}
-All experiments were conducted on NVIDIA H100 GPUs, each equipped with 80 GB of HBM3 memory. This hardware provides native support for both the E4M3 (4-bit exponent, 3-bit mantissa) and E5M2 (5-bit exponent, 2-bit mantissa) FP8 formats, which are crucial for our work. We utilized the NVIDIA Transformer Engine (TE) library \cite{transformer_engine}, which provides high-level abstractions for leveraging the FP8 Tensor Core capabilities of the Hopper architecture. The software stack was built on PyTorch and the Hugging Face Transformers library.
+All experiments were conducted on NVIDIA RTX 6000 Pro GPUs, each equipped with 96 GB of memory. This hardware provides native support for both the E4M3 (4-bit exponent, 3-bit mantissa) and E5M2 (5-bit exponent, 2-bit mantissa) FP8 formats, which are crucial for our work. We utilized the NVIDIA Transformer Engine (TE) library \cite{transformer_engine}, which provides high-level abstractions for leveraging the FP8 Tensor Core capabilities of the Hopper architecture. The software stack was built on PyTorch 2.7+, CUDA 12.9, Transformer Engine 2.5.0, and the Hugging Face Transformers library \cite{huggingface}, which has recently added support for fine-grained FP8 quantization \cite{huggingface2024fp8}.
 
 \section{FP8 Training and Implementation}
 
@@ -13,10 +13,26 @@ Our core contribution lies in the application and evaluation of a layer-wise FP8
 \subsection{Model Conversion to Transformer Engine}
 To enable FP8 training, we converted the standard Hugging Face Llama models to use Transformer Engine's specialized layers. This was achieved by dynamically replacing the `LlamaDecoderLayer` with a custom `TELlamaDecoderLayer`. This custom layer substitutes standard PyTorch modules with their TE counterparts, namely `te.pytorch.MultiheadAttention` and `te.pytorch.LayerNormMLP`. This modular replacement allows us to introduce FP8 computation via TE's `fp8\_autocast` context manager while preserving the original model weights and architecture.
 
+\subsection{Computational Pattern Analysis}
+To design an effective layer-wise FP8 assignment, we analyzed the numerical behavior of major transformer components. Three main patterns emerge that guide our precision strategy:
+
+\subsubsection{MLP Stability}
+Feed-forward (MLP) layers exhibit concentrated activation and gradient distributions, largely confined within moderate ranges. Since their dense matrix multiplications evolve smoothly during training, they benefit from the higher mantissa precision of \textbf{E4M3}, which better preserves small value differences.
+
+\subsubsection{Attention Variability}
+In contrast, self-attention layers display wider dynamic ranges, especially in query–key interactions:
+\[
+\text{Attn}(Q,K,V) = \mathrm{softmax}\!\left(\tfrac{QK^\top}{\sqrt{d_k}}\right)V.
+\]
+The softmax operation amplifies scale sensitivity, and attention weights often span several orders of magnitude. This motivates the use of \textbf{E5M2}, whose extended exponent range prevents overflow and underflow.
+
+\subsubsection{Gradient Amplification}
+Backpropagation through attention further increases gradient variance, particularly in query and key projections. The chain rule propagation multiplies scaling factors, producing distributions broader than those in MLP layers. Hence, stable training requires assigning formats with sufficient exponent headroom in these pathways.
+
 \subsection{FP8 Precision Strategies}
 We compared three distinct precision strategies to isolate the effects of our layer-wise approach. The first, our \textbf{BF16 Baseline}, represents a standard mixed-precision training regime where all weights, activations, and gradients are in BFloat16 format, with optimizer states maintained in FP32. This serves as our primary reference for accuracy and convergence.
 
-The second strategy is \textbf{Hybrid FP8 (Uniform)}, which follows NVIDIA's recommended approach of applying a uniform FP8 format across all layers. In this configuration, weights and forward pass activations use the E4M3 format for higher precision, while the backward pass gradients use the E5M2 format to accommodate a wider dynamic range.
+The second strategy is \textbf{Hybrid FP8 (Uniform)}, which follows NVIDIA's recommended approach of applying a uniform FP8 format across all layers. This approach is similar to recent large-scale implementations like DeepSeek-V3 \cite{deepseekv3}, which applies E4M3 universally. In our configuration, weights and forward pass activations use the E4M3 format for higher precision, while the backward pass gradients use the E5M2 format to accommodate a wider dynamic range.
 
 The third strategy is our proposed \textbf{Layer-wise FP8} methodology. Here, we selectively assign FP8 formats based on the function of each component within the Transformer block. For the MLP layers, all components use the E4M3 format, as we hypothesize that the feed-forward network benefits from higher precision for stable computation. In contrast, the attention block's query and key (Q/K) projections use the E5M2 format to provide a wider dynamic range, which can be beneficial for the sensitive query-key dot-product calculations. Finally, the attention's value and output (V/O) projections use the E4M3 format, prioritizing precision for the value representations and the final output of the attention block.
 
@@ -29,26 +45,6 @@ A critical component of FP8 training is dynamic scaling, which prevents the nume
 
 After training, the model checkpoints were evaluated for their inference performance. The fine-tuned models were loaded into a vLLM-based inference server, which uses paged attention and other optimizations for high-throughput text generation.
 
-To assess performance, we benchmarked the models in three different numerical formats on an NVIDIA H100 GPU. The first setting used the native \textbf{FP8} precision from training. The second setting involved up-casting the FP8 weights to \textbf{FP16}, a common half-precision baseline. The third setting, which served as a full-precision reference, involved up-casting the weights to \textbf{FP32}.
-
-For each setting, we measured token throughput (tokens per second) and peak GPU memory consumption. The results of this analysis, presented in Chapter \ref{chap:experiments_and_evaluation}, demonstrate the practical benefits of FP8 training when deployed in a production-like inference scenario.
-
-\subsection{FP8 Precision Strategies}
-We compared three distinct precision strategies to isolate the effects of our layer-wise approach. The first, our \textbf{BF16 Baseline}, represents a standard mixed-precision training regime where all weights, activations, and gradients are in BFloat16 format, with optimizer states maintained in FP32. This serves as our primary reference for accuracy and convergence.
-
-The second strategy is \textbf{Hybrid FP8 (Uniform)}, which follows NVIDIA's recommended approach of applying a uniform FP8 format across all layers. In this configuration, weights and forward pass activations use the E4M3 format for higher precision, while the backward pass gradients use the E5M2 format to accommodate a wider dynamic range.
-
-The third strategy is our proposed \textbf{Layer-wise FP8} methodology. Here, we selectively assign FP8 formats based on the function of each component within the Transformer block. For the MLP layers, all components use the E4M3 format, as we hypothesize that the feed-forward network benefits from higher precision for stable computation. In contrast, the attention block's query and key (Q/K) projections use the E5M2 format to provide a wider dynamic range, which can be beneficial for the sensitive query-key dot-product calculations. Finally, the attention's value and output (V/O) projections use the E4M3 format, prioritizing precision for the value representations and the final output of the attention block.
-
-In all FP8 configurations, a full-precision FP32 copy of the model weights is maintained by the optimizer to ensure numerical stability and accurate weight updates.
-
-\subsection{Dynamic Scaling}
-A critical component of FP8 training is dynamic scaling, which prevents the numerical overflow and underflow that would otherwise occur with low-precision data types. We employ Transformer Engine's built-in delayed scaling mechanism. This technique maintains a running history of the maximum absolute values (amax) of tensors and computes a scaling factor to map the tensor values into the representable range of the target FP8 format. The scaling factors are updated periodically rather than at every iteration to ensure stability.
-
-\section{Inference and Evaluation}
-
-After training, the model checkpoints were evaluated for their inference performance. The fine-tuned models were loaded into a vLLM-based inference server, which uses paged attention and other optimizations for high-throughput text generation.
-
-To assess performance, we benchmarked the models in three different numerical formats on an NVIDIA H100 GPU. The first setting used the native \textbf{FP8} precision from training. The second setting involved up-casting the FP8 weights to \textbf{FP16}, a common half-precision baseline. The third setting, which served as a full-precision reference, involved up-casting the weights to \textbf{FP32}.
+To assess performance, we benchmarked the models in three different numerical formats on an NVIDIA RTX 6000 Pro GPU. The first setting used the native \textbf{FP8} precision from training. The second setting involved up-casting the FP8 weights to \textbf{FP16}, a common half-precision baseline. The third setting, which served as a full-precision reference, involved up-casting the weights to \textbf{FP32}.
 
 For each setting, we measured token throughput (tokens per second) and peak GPU memory consumption. The results of this analysis, presented in Chapter \ref{chap:experiments_and_evaluation}, demonstrate the practical benefits of FP8 training when deployed in a production-like inference scenario.

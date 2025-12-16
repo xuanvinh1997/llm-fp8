@@ -133,3 +133,7 @@ ZeRO-style parameter/state sharding.
 These techniques jointly amortise compute and memory costs, enabling
 hundreds-of-billion-parameter models to converge within practical
 budgets.
+
+\subsection{Mixture of Experts (MoE)}\label{sec:moe}
+
+To further scale model capacity without a proportional increase in computational cost, the Mixture of Experts (MoE) architecture has been adopted. MoE models replace dense feed-forward layers with a sparse layer containing multiple "expert" networks. For each input token, a gating network selects a sparse subset of experts to process the data. This approach, pioneered in large-scale models by Shazeer et al. \cite{shazeer2017outrageouslylargeneuralnetworks}, allows for a massive increase in parameter count while maintaining constant inference cost per token. The Switch Transformer \cite{fedus2022switchtransformersscalingtrillion} further refined this by routing each token to a single expert, enabling scaling to trillion-parameter models with simple and efficient sparsity.

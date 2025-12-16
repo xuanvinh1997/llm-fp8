@@ -2,7 +2,7 @@
 \section{Layer-Wise FP8 Training Methodology}
 
 \subsection{Hardware Platform}
-All experiments were executed on NVIDIA Blackwell architecture GPUs with 96 GB of memory, leveraging advanced FP8 Tensor Core capabilities. The hardware provides native support for both E4M3 and E5M2 formats, which we access through the NVIDIA Transformer Engine (TE) library\cite{transformer_engine}.
+All experiments were executed on NVIDIA RTX 6000 Pro GPUs with 96 GB of memory, leveraging advanced FP8 Tensor Core capabilities. The hardware provides native support for both E4M3 and E5M2 formats \cite{micikevicius2022fp8formatsdeeplearning, nvidia_fp8_primer}, which we access through the NVIDIA Transformer Engine (TE) library\cite{transformer_engine}.
 
 \subsection{Training Configuration}
 \vspace{-0.5em}

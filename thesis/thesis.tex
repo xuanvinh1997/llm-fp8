@@ -14,6 +14,7 @@
 
 \usepackage[font=small]{caption}
 \usepackage{booktabs}
+\usepackage{tocloft,calc}
 \usepackage[unicode]{hyperref}
 \usepackage[left=3cm,right=2cm,top=2.5cm,bottom=3cm]{geometry}
 \usepackage{titlesec} 
@@ -25,10 +26,11 @@
 \usepackage{multirow}
 \usepackage{sectsty}
 \usepackage{fancyhdr}
-\usepackage{tocloft,calc}
+% \usepackage{tocloft,calc}
 \usepackage{listings}
 \usepackage{makecell}
 \usepackage[sort&compress]{natbib}
+\usepackage{bibentry}
 \usetikzlibrary{calc}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
@@ -45,8 +47,12 @@
 \bibliographystyle{unsrt}
 
 \makeatletter
-\def\l@figure{\@dottedtocline{1}{1em}{2.2em}}
-\def\l@table{\@dottedtocline{1}{1em}{2.2em}}
+\setlength{\cftfigindent}{1em}
+\setlength{\cftfignumwidth}{2.2em}
+\setlength{\cfttabindent}{1em}
+\setlength{\cfttabnumwidth}{2.2em}
+% \def\l@figure{\@dottedtocline{1}{1em}{2.2em}}
+% \def\l@table{\@dottedtocline{1}{1em}{2.2em}}
 \renewcommand*{\ALG@name}{Algorithm}
 \makeatother
 
@@ -79,6 +85,7 @@
 \newcommand{\argmax}{\arg\!\max}
 
 \begin{document}
+\nobibliography*
 \input{cover}\newpage\cleardoublepage
 
 % Restore page numbering after cover
@@ -119,12 +126,13 @@
 \input{chapters/c3/c3_methodology}\newpage\cleardoublepage
 \input{chapters/c4/c4_experiments_and_evaluation}\newpage\cleardoublepage
 \input{chapters/conclusion}\newpage\cleardoublepage
+\input{chapters/publication}\newpage\cleardoublepage
 
 %\nocite{*}
 \phantomsection 
 \addcontentsline{toc}{chapter}{Reference}
-
-
 \bibliography{references}\newpage\cleardoublepage
-\bibliographystyle{plain}
+
+
+
 \end{document}

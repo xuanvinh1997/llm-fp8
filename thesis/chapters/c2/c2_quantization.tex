@@ -1,10 +1,10 @@
 \section{Quantization}
 
-Quantization refers to mapping high-precision parameters to lower-bit representations, which reduces memory usage and data transfer expenses. In deep learning, quantization may be introduced during the training phase (quantization-aware training) or applied later as a post-training adjustment. Traditional FP32 and FP16 formats continue to be favored during the training of foundational language models, but GPU memory usage becomes a bottleneck since every gradient update is stored at full precision. 
+Quantization refers to mapping high-precision parameters to lower-bit representations, which reduces memory usage and data transfer expenses. In deep learning, quantization may be introduced during the training phase (quantization-aware training) or applied later as a post-training adjustment. Traditional FP32 and FP16 formats continue to be favored during the training of foundational language models \cite{micikevicius2018mixed}, but GPU memory usage becomes a bottleneck since every gradient update is stored at full precision. 
 
 \subsection{BF16}
 
-\textbf{BF16} (brain floating-point 16) compresses FP32 to two bytes while preserving its eight exponent bits.  The mantissa shrinks to seven bits, leaving the dynamic range intact but reducing significant precision. Table~\ref{tab:bf16-layout} compares the bit allocations of FP32, FP16, and BF16.
+\textbf{BF16} (brain floating-point 16) \cite{kalamkar2019study} compresses FP32 to two bytes while preserving its eight exponent bits.  The mantissa shrinks to seven bits, leaving the dynamic range intact but reducing significant precision. Table~\ref{tab:bf16-layout} compares the bit allocations of FP32, FP16, and BF16.
 
 \begin{table}[htbp]
 \centering
@@ -77,9 +77,9 @@ E5M2 & 5 & 2 & Back-propagated gradients \\
 
 
 \textbf{Why FP8?}  
-Storing values in eight bits slashes memory to one-quarter of FP32 and half of FP16/BF16, lightening pressure on GPU DRAM. Hopper-class GPUs (e.g., \ NVIDIA H100) and AMD MI300x embed native FP8 tensor cores that deliver more than three times the throughput of FP16 kernels, while the reduced word size lowers DRAM traffic and power consumption. Consequently, FP8 training often yields simultaneous gains in speed, capacity, and energy efficiency without harming convergence.
+Storing values in eight bits slashes memory to one-quarter of FP32 and half of FP16/BF16, lightening pressure on GPU DRAM. Hopper and Ada Lovelace-class GPUs (e.g., NVIDIA H100, RTX 6000) and AMD MI300x embed native FP8 tensor cores that deliver more than three times the throughput of FP16 kernels, while the reduced word size lowers DRAM traffic and power consumption. Consequently, FP8 training often yields simultaneous gains in speed, capacity, and energy efficiency without harming convergence.
 
-Native FP8 execution ships with NVIDIA Hopper (H100/NVL), AMD CDNA3 (MI300x), and several upcoming AI ASICs. Software layers such as \texttt{Transformer Engine} or \texttt{bitsandbytes} wrap these kernels and insert dynamic scaling to keep reduced-precision arithmetic numerically safe.
+Native FP8 execution ships with NVIDIA Hopper (H100/NVL) and Ada Lovelace (RTX 6000), AMD CDNA3 (MI300x), and several upcoming AI ASICs. Software layers such as \texttt{Transformer Engine} or \texttt{bitsandbytes} wrap these kernels and insert dynamic scaling to keep reduced-precision arithmetic numerically safe.
 
 \textbf{Encoding rule.}  
 Both FP8 layouts follow the standard IEEE-754 recipe

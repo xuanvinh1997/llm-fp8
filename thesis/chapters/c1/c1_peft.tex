@@ -5,7 +5,7 @@ Full fine-tuning of large language models is often computationally prohibitive d
 \subsection{LoRA: Low-Rank Adaptation}
 
 \subsubsection{Mathematical Foundation}
-The Low-Rank Adaptation (LoRA) technique is motivated by the hypothesis that the change in weights during model adaptation has a low "intrinsic rank." This suggests that the weight updates can be effectively represented in a much lower-dimensional subspace.
+The Low-Rank Adaptation (LoRA) technique \cite{hu2021lora} is motivated by the hypothesis that the change in weights during model adaptation has a low "intrinsic rank." This suggests that the weight updates can be effectively represented in a much lower-dimensional subspace.
 
 \subsubsection{Formulation}
 For a pre-trained weight matrix $\mathbf{W}_0 \in \mathbb{R}^{d \times k}$, LoRA introduces a low-rank decomposition to represent the update, $\Delta \mathbf{W}$. The modified weight matrix, $\mathbf{W}$, is then:
@@ -46,7 +46,7 @@ This means that LoRA introduces no additional latency during inference, as the a
 
 \subsection{QLoRA: Quantized Low-Rank Adaptation}
 
-QLoRA further reduces the memory footprint of fine-tuning by combining LoRA with quantization. It introduces three key innovations that enable the fine-tuning of extremely large models on a single GPU.
+QLoRA \cite{dettmers2024qlora} further reduces the memory footprint of fine-tuning by combining LoRA with quantization. It introduces three key innovations that enable the fine-tuning of extremely large models on a single GPU.
 
 \subsubsection{Core Innovations of QLoRA}
 

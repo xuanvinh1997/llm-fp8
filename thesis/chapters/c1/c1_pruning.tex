@@ -4,7 +4,7 @@ Pruning is a family of techniques aimed at reducing model size and computational
 
 \subsection{SparseGPT: A One-Shot Pruning Framework}
 
-SparseGPT is a one-shot pruning method, meaning it induces sparsity in a pre-trained model without requiring any subsequent fine-tuning. It is designed to efficiently find an optimal sparse representation of the weights that minimizes the impact on the model's output.
+SparseGPT \cite{frantar2023sparsegpt} is a one-shot pruning method, meaning it induces sparsity in a pre-trained model without requiring any subsequent fine-tuning. It is designed to efficiently find an optimal sparse representation of the weights that minimizes the impact on the model's output.
 
 \subsubsection{Problem Formulation}
 The core objective of SparseGPT is, for a given pre-determined sparsity mask $M$, to find the optimal values for the remaining weights that minimize the layer's output reconstruction error. This can be expressed as:
@@ -43,7 +43,7 @@ SparseGPT circumvents this issue with a key insight: by processing the weights i
 \end{algorithm}
 
 \subsubsection{Adaptive Mask Selection}
-Instead of using a fixed, pre-determined mask, SparseGPT can adaptively select which weights to prune. This is done by evaluating the error that would be introduced by pruning each weight and then removing those that cause the least error. The criterion, derived from the Optimal Brain Surgeon framework, is:
+Instead of using a fixed, pre-determined mask, SparseGPT can adaptively select which weights to prune. This is done by evaluating the error that would be introduced by pruning each weight and then removing those that cause the least error. The criterion, derived from the Optimal Brain Surgeon framework \cite{hassibi1993optimal}, is:
 \begin{equation}
 \epsilon_{ij} = \frac{|w_{ij}|^2}{[\mathbf{H}_{\text{inv}}]_{jj}}
 \end{equation}
@@ -57,7 +57,7 @@ The complexity of SparseGPT is dominated by the Hessian preparation, which is $O
 
 \subsection{Wanda: A Simplified Pruning Criterion}
 
-Wanda (short for Weights AND Activations) is another one-shot pruning method that offers a much simpler and faster alternative to SparseGPT.
+Wanda (short for Weights AND Activations) \cite{sun2023wanda} is another one-shot pruning method that offers a much simpler and faster alternative to SparseGPT.
 
 \subsubsection{The Wanda Importance Score}
 The core idea of Wanda is to prune weights based on a simple importance score that considers both the magnitude of the weight and the magnitude of its corresponding input activation. The importance of a weight $w_{ij}$ is defined as:

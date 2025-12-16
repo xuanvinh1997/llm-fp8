@@ -2,7 +2,7 @@
 
 \subsection{Mathematical Foundations of Quantization}
 
-Quantization is a process that maps high-precision floating-point values to a lower-precision data type. This reduction in numerical precision is a key strategy for compressing LLMs and accelerating their inference speed. For a given weight tensor $\mathbf{W}$, the fundamental affine quantization operation is defined as:
+Quantization is a process that maps high-precision floating-point values to a lower-precision data type \cite{jacob2018quantization}. This reduction in numerical precision is a key strategy for compressing LLMs and accelerating their inference speed. For a given weight tensor $\mathbf{W}$, the fundamental affine quantization operation is defined as:
 
 \begin{equation}\label{eq:quant_op}
 Q(w) = \Delta \cdot \text{round}\left(\frac{w}{\Delta} + z\right)
@@ -19,10 +19,12 @@ _2
 
 Here, $\mathbf{W}$ is the original high-precision weight matrix, $\hat{\mathbf{W}}$ is its quantized counterpart, and $X$ represents a sample of layer inputs drawn from a calibration dataset. This objective function seeks to find a quantized matrix $\hat{\mathbf{W}}$ that produces an output as close as possible to the original matrix's output.
 
+Prior to GPTQ, methods like GPT3.int8() \cite{dettmers2022gpt3} demonstrated the feasibility of 8-bit matrix multiplication for large transformers by handling outlier features separately.
+
 \subsection{GPTQ: Post-Training Quantization with Second-Order Information}
 
 \subsubsection{Theoretical Framework}
-The GPTQ algorithm is a sophisticated post-training quantization (PTQ) method that extends the Optimal Brain Quantization (OBQ) framework. The central premise of OBQ-based methods is that the error introduced by quantizing a single weight can be partially compensated for by making small adjustments to the remaining, unquantized weights. This compensation is guided by second-order information about the loss function, which is captured by the Hessian matrix.
+The GPTQ algorithm \cite{frantar2022gptq} is a sophisticated post-training quantization (PTQ) method that extends the Optimal Brain Quantization (OBQ) framework. The central premise of OBQ-based methods is that the error introduced by quantizing a single weight can be partially compensated for by making small adjustments to the remaining, unquantized weights. This compensation is guided by second-order information about the loss function, which is captured by the Hessian matrix.
 
 \subsubsection{The Optimal Brain Quantization (OBQ) Update Rule}
 When a specific weight, $w_q$, is quantized, the optimal update, $\delta_F$, to be applied to the set of remaining unquantized weights, $F$, is given by:
@@ -65,7 +67,7 @@ The computational complexity of GPTQ is dominated by the calculation of the inve
 \subsection{AWQ: Activation-Aware Weight Quantization}
 
 \subsubsection{Core Insight}
-The central observation behind Activation-Aware Weight Quantization (AWQ) is that not all weights are equally important. A small fraction of weights (typically 0.1% to 1%) are considered "salient" because they are consistently multiplied by activations of large magnitude. Protecting these salient weights from significant quantization error can drastically improve the performance of the quantized model.
+The central observation behind Activation-Aware Weight Quantization (AWQ) \cite{lin2023awq} is that not all weights are equally important. A small fraction of weights (typically 0.1% to 1%) are considered "salient" because they are consistently multiplied by activations of large magnitude. Protecting these salient weights from significant quantization error can drastically improve the performance of the quantized model.
 
 \subsubsection{Identification of Salient Channels}
 AWQ identifies these critical weight channels not by their own magnitude, but by analyzing the statistics of the input activations. The saliency of a channel is determined by the product of the mean activation magnitude and the norm of the corresponding weights:

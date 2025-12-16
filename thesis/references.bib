@@ -1,3 +1,183 @@
+% ==== PEFT Methods ====
+
+@inproceedings{hu2021lora,
+      title={LoRA: Low-Rank Adaptation of Large Language Models},
+      author={Hu, Edward J and Shen, Yelong and Wallis, Phillip and Allen-Zhu, Zeyuan and Li, Yuanzhi and Wang, Shean and Wang, Lu and Chen, Weizhu},
+      booktitle={International Conference on Learning Representations},
+      year={2022}
+}
+
+@inproceedings{dettmers2024qlora,
+      title={QLoRA: Efficient Finetuning of Quantized LLMs},
+      author={Dettmers, Tim and Pagnoni, Artidoro and Holtzman, Ari and Zettlemoyer, Luke},
+      booktitle={Advances in Neural Information Processing Systems},
+      volume={36},
+      year={2024}
+}
+
+@inproceedings{dao2022flashattention,
+  title={FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness},
+  author={Dao, Tri and Fu, Daniel Y and Ermon, Stefano and Rudra, Atri and R{\'e}, Christopher},
+  booktitle={Advances in Neural Information Processing Systems},
+  volume={35},
+  pages={16344--16359},
+  year={2022}
+}
+
+@inproceedings{kwon2023pagedattention,
+  title={Efficient Memory Management for Large Language Model Serving with PagedAttention},
+  author={Kwon, Woosuk and Li, Zhuohan and Zhuang, Siyuan and Sheng, Ying and Zheng, Lianmin and Yu, Cody Hao and Gonzalez, Joseph E and Stoica, Ion and Zhang, Hao},
+  booktitle={Proceedings of the 29th Symposium on Operating Systems Principles},
+  pages={611--626},
+  year={2023}
+}
+
+@inproceedings{frantar2023sparsegpt,
+  title={SparseGPT: Massive Language Models Can Be Accurately Pruned in One-Shot},
+  author={Frantar, Elias and Alistarh, Dan},
+  booktitle={International Conference on Machine Learning},
+  pages={10323--10337},
+  year={2023},
+  organization={PMLR}
+}
+
+@article{sun2023wanda,
+  title={A Simple and Effective Pruning Approach for Large Language Models},
+  author={Sun, Mingjie and Liu, Zhuang and Bair, Anna and Kolter, J Zico},
+  journal={arXiv preprint arXiv:2306.11695},
+  year={2023}
+}
+
+@inproceedings{hassibi1993optimal,
+  title={Second order derivatives for network pruning: Optimal brain surgeon},
+  author={Hassibi, Babak and Stork, David G},
+  booktitle={Advances in neural information processing systems},
+  pages={164--171},
+  year={1993}
+}
+
+@inproceedings{frantar2022gptq,
+  title={GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers},
+  author={Frantar, Elias and Ashkboos, Saleh and Hoefler, Torsten and Alistarh, Dan},
+  booktitle={International Conference on Learning Representations},
+  year={2023}
+}
+
+@inproceedings{lin2023awq,
+  title={AWQ: Activation-aware Weight Quantization for LLM Compression and Acceleration},
+  author={Lin, Ji and Tang, Jiaming and Tang, Haotian and Yang, Shang and Dang, Xingyu and Han, Song},
+  booktitle={Proceedings of the 6th MLSys Conference},
+  year={2023}
+}
+
+@inproceedings{kse2025_fp8,
+  author    = {Pham, Vinh Xuan and Nguyen, Vinh Van},
+  title     = {Optimizing LLM with FP8},
+  booktitle = {2025 17th International Conference on Knowledge and Systems Engineering (KSE)},
+  year      = {2025},
+  month     = {Nov.},
+  address   = {Da Lat, Vietnam},
+  publisher = {IEEE},
+  note      = {Poster Presentation}
+}
+
+% ==== Speculative Decoding ====
+
+@inproceedings{leviathan2023fast,
+  title={Fast Inference from Transformers via Speculative Decoding},
+  author={Leviathan, Yaniv and Kalman, Matan and Matias, Yossi},
+  booktitle={International Conference on Machine Learning},
+  pages={19274--19286},
+  year={2023},
+  organization={PMLR}
+}
+
+@inproceedings{chen2023accelerating,
+  title={Accelerating Large Language Model Decoding with Speculative Sampling},
+  author={Chen, Charlie and Borgeaud, Sebastian and Irving, Geoffrey and Lespiau, Jean-Baptiste and Sifre, Laurent and Jumper, John},
+  booktitle={arXiv preprint arXiv:2302.01318},
+  year={2023}
+}
+
+@inproceedings{li2024eagle,
+  title={EAGLE: Speculative Sampling by Extrapolating the Next Feature},
+  author={Li, Yuhui and Wei, Fangyun and Zhang, Chamberlain and Zhang, Hongyang},
+  booktitle={arXiv preprint arXiv:2401.15077},
+  year={2024}
+}
+
+@inproceedings{li2024eagle2,
+  title={EAGLE-2: Faster Inference of Large Language Models with Dynamic Feature Extrapolation},
+  author={Li, Yuhui and Wei, Fangyun and Zhang, Chamberlain and Zhang, Hongyang},
+  booktitle={arXiv preprint arXiv:2406.16858},
+  year={2024}
+}
+
+% ==== Optimization and Architecture ====
+
+@misc{together2023redpajama,
+  author = {Together Computer},
+  title = {RedPajama: An Open Source Recipe to Reproduce LLaMA training dataset},
+  year = {2023},
+  howpublished = {\url{https://github.com/togethercomputer/RedPajama-Data}},
+}
+
+@inproceedings{loshchilov2017decoupled,
+  title={Decoupled Weight Decay Regularization},
+  author={Loshchilov, Ilya and Hutter, Frank},
+  booktitle={International Conference on Learning Representations},
+  year={2019}
+}
+
+@inproceedings{zhang2019root,
+  title={Root Mean Square Layer Normalization},
+  author={Zhang, Biao and Sennrich, Rico},
+  booktitle={Advances in Neural Information Processing Systems},
+  volume={32},
+  year={2019}
+}
+
+@article{su2024roformer,
+  title={RoFormer: Enhanced Transformer with Rotary Position Embedding},
+  author={Su, Jianlin and Lu, Yu and Pan, Shengfeng and Murtadha, Ahmed and Wen, Bo and Liu, Yunfeng},
+  journal={Neurocomputing},
+  volume={568},
+  pages={127063},
+  year={2024}
+}
+
+@article{chowdhery2023palm,
+  title={PaLM: Scaling Language Modeling with Pathways},
+  author={Chowdhery, Aakanksha and Narang, Sharan and Devlin, Jacob and Bosma, Maarten and Mishra, Gaurav and Roberts, Adam and Barham, Paul and Chung, Hyung Won and Sutton, Charles and Gehrmann, Sebastian and others},
+  journal={Journal of Machine Learning Research},
+  volume={24},
+  number={240},
+  pages={1--113},
+  year={2023}
+}
+
+@article{touvron2023llama,
+  title={Llama 2: Open Foundation and Fine-Tuned Chat Models},
+  author={Touvron, Hugo and Martin, Louis and Stone, Kevin and Albert, Peter and Almahairi, Amjad and Babaei, Yasmine and Bashlykov, Nikolay and Batra, Soumya and Bhargava, Prajjwal and Bhosale, Shruti and others},
+  journal={arXiv preprint arXiv:2307.09288},
+  year={2023}
+}
+
+@misc{qwen25,
+    title = {Qwen2.5: A Party of Foundation Models},
+    url = {https://qwenlm.github.io/blog/qwen2.5/},
+    author = {Qwen Team},
+    month = {September},
+    year = {2024}
+}
+
+@inproceedings{dao2023flashattention2,
+  title={FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning},
+  author={Dao, Tri},
+  booktitle={International Conference on Learning Representations},
+  year={2024}
+}
+
 % ==== FP8 and Mixed Precision Training ====
 
 @misc{micikevicius2022fp8formatsdeeplearning,

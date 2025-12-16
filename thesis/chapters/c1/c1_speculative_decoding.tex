@@ -3,7 +3,7 @@
 \subsection{The Draft-and-Verify Framework}
 
 \subsubsection{Motivation}
-The process of autoregressive generation in large language models is inherently sequential and is typically constrained by memory bandwidth. For each token generated, the entire model, which can be hundreds of gigabytes in size, must be read from memory. This leaves the powerful computational units of the GPU largely underutilized. Speculative decoding is a technique designed to ameliorate this by generating multiple tokens in parallel, thereby improving hardware efficiency.
+The process of autoregressive generation in large language models is inherently sequential and is typically constrained by memory bandwidth. For each token generated, the entire model, which can be hundreds of gigabytes in size, must be read from memory. This leaves the powerful computational units of the GPU largely underutilized. Speculative decoding \cite{leviathan2023fast, chen2023accelerating} is a technique designed to ameliorate this by generating multiple tokens in parallel, thereby improving hardware efficiency.
 
 \subsubsection{Core Algorithm}
 Speculative decoding employs a small, fast "draft" model, $M_d$, to generate a sequence of candidate tokens, which are then verified in a single parallel pass by the large, accurate "target" model, $M_t$.
@@ -61,7 +61,7 @@ The theoretical speedup of speculative decoding depends on the relative cost of 
 \subsection{EAGLE: Speculation at the Feature Level}
 
 \subsubsection{Core Innovation}
-The EAGLE (Extrapolative-based Autoregressive Generation) method introduces an alternative to using a separate draft model. Instead, it predicts future token distributions by extrapolating from the target model's own internal hidden states.
+The EAGLE (Extrapolative-based Autoregressive Generation) method \cite{li2024eagle} introduces an alternative to using a separate draft model. Instead, it predicts future token distributions by extrapolating from the target model's own internal hidden states.
 
 \subsubsection{Architectural Design}
 EAGLE integrates a lightweight, autoregressive head into the target model's architecture. It extracts the feature vector, $f_t$, from a penultimate layer of the target model (e.g., the output of the second-to-last transformer block). A small autoregressive head then predicts the feature vector for the next token, $f_{\text{tilde}_{t+1}} = \text{EAGLE\_head}(f_t, \text{embedding}(x_t))$. This predicted feature vector is then passed to the original model's language model head to generate the logits for the next token: $\text{logits} = M_t.\text{lm\_head}(f_{\text{tilde}_{t+1}})$.
@@ -73,4 +73,4 @@ The EAGLE head is trained to minimize a loss function that combines a regression
 \end{equation}
 
 \subsubsection{EAGLE-2: Dynamic Tree-Based Speculation}
-A further enhancement, EAGLE-2, moves from linear speculation to a more dynamic, tree-based approach. At each position, multiple candidate tokens are generated based on the top-k predictions. Branches of the speculation tree that correspond to high-confidence predictions are expanded more deeply. The entire tree of candidate tokens is then verified in a single forward pass of the target model, using a specially designed tree attention mask. The longest path in the tree that is accepted by the rejection sampling process is chosen as the output. This tree-based approach allows for a more flexible and potentially more efficient exploration of the possible future token sequences.
+A further enhancement, EAGLE-2 \cite{li2024eagle2}, moves from linear speculation to a more dynamic, tree-based approach. At each position, multiple candidate tokens are generated based on the top-k predictions. Branches of the speculation tree that correspond to high-confidence predictions are expanded more deeply. The entire tree of candidate tokens is then verified in a single forward pass of the target model, using a specially designed tree attention mask. The longest path in the tree that is accepted by the rejection sampling process is chosen as the output. This tree-based approach allows for a more flexible and potentially more efficient exploration of the possible future token sequences.
