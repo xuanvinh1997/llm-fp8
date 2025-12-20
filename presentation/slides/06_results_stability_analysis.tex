@@ -1,25 +1,25 @@
-\begin{frame}{Stability Analysis}
+\begin{frame}{Experiment and analysis: Stability analysis}
     \begin{columns}[t]
         \begin{column}{0.48\textwidth}
-            \begin{alertblock}{Uniform FP8 Limitation}
+            \textbf{Uniform FP8 limitation}
+            
             \small
-            \textbf{Baseline (Uniform E5M2)} exhibits instability:
+            Baseline (Uniform E5M2) exhibits instability:
             \begin{itemize}
                 \item \textit{Cause}: MLP gradients have narrow distribution
                 \item \textit{Effect}: Coarse E5M2 quantization induces noise $\rightarrow$ spikes
             \end{itemize}
-            \end{alertblock}
         \end{column}
 
         \begin{column}{0.48\textwidth}
-            \begin{block}{Layer-Wise Solution}
+            \textbf{Layer-wise solution}
+            
             \small
-            \textbf{Component-Adaptive Assignment}:
+            Component-adaptive assignment:
             \begin{itemize}
                 \item \textbf{Attention}: E5M2 accommodates gradient extrema
                 \item \textbf{MLP}: E4M3 ensures precision for stable convergence
             \end{itemize}
-            \end{block}
         \end{column}
     \end{columns}
 

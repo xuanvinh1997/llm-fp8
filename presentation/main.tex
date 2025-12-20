@@ -16,6 +16,16 @@
 \usepackage{adjustbox}
 \usepackage{minted}
 
+% Bibliography setup for footnotes
+\usepackage{natbib}
+\bibliographystyle{ieeetr}
+\setbeamerfont{footnote}{size=\tiny}
+\setbeamertemplate{bibliography item}{}
+
+% Make citations appear as superscript footnotes
+\let\oldcite\cite
+\renewcommand{\cite}[1]{\textsuperscript{\oldcite{#1}}}
+
 % Theme settings
 \setbeamertemplate{footline}{
   \leavevmode%
@@ -56,36 +66,46 @@
 % Title slide
 \input{slides/01_title}
 
+% Contents
+\input{slides/00_contents}
+
 % Problem and Motivation
+\section{Motivation}
 \input{slides/02_problem}
+
+\section{Related works}
 \input{slides/02_optimization_survey}
 
 % Proposed Approach
+\section{Our proposed method}
 \input{slides/03_approach_part1}
 \input{slides/03_approach_part2}
 % \input{slides/03_approach_part3}
 
 % Experimental Setup
+\section{Experiment and analysis}
 \input{slides/04_setup}
+\input{slides/04_dataset_sample}
 
-% Results - Performance
+% Results: Performance Benefits
 \input{slides/05_results_performance}
 \input{slides/05_results_memory}
 
-% Results - Stability (Loss Variance)
+% Results: Training Quality
 \input{slides/06_results_stability}
 \input{slides/06_results_stability_analysis}
-
-% Results - Convergence Quality
 \input{slides/07_results_convergence}
-
-% Results - Training Perplexity
 \input{slides/08_results_perplexity}
 
-% Publications
+% Contributions & Future Work
+\section{Conclusion}
 \input{slides/10_publication}
-
-% Conclusion and Future Work
 \input{slides/09_conclusion}
+
+% References (as footnotes on each slide)
+\begin{frame}[allowframebreaks]{References}
+\tiny
+\bibliography{references}
+\end{frame}
 
 \end{document}

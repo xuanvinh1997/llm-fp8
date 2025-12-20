@@ -1,4 +1,4 @@
-\frametitle{Experiment and analysis: Dataset sample}
+\begin{frame}[fragile]{Experiment and analysis: Dataset sample}
 
 \textbf{OpenMathInstruct-2 format}
 
@@ -6,30 +6,30 @@
 \begin{columns}[t]
 \begin{column}{0.48\textwidth}
     \textbf{Instruction-response pairs:}
-
+    
     \vspace{0.2cm}
-
+    
     \begin{minted}[fontsize=\tiny,breaklines,bgcolor=lightgray!10]{python}
 {
-  "problem": "If 3x + 2 = 14, what
+  "problem": "If 3x + 2 = 14, what 
    is the value of x\?",
-  "solution": "Step 1: Subtract 2
+  "solution": "Step 1: Subtract 2 
    from both sides: 3x = 12\n
    Step 2: Divide by 3: x = 4\n
    Answer: 4"
 }
     \end{minted}
-
+    
     \vspace{0.2cm}
-
+    
     \textbf{Format:} JSON with problem-solution pairs
 \end{column}
 
 \begin{column}{0.48\textwidth}
     \textbf{Training statistics:}
-
+    
     \vspace{0.2cm}
-
+    
     \small
     \begin{tabular}{@{}ll@{}}
     \toprule
@@ -43,10 +43,11 @@
     Total epochs & 3 \\
     \bottomrule
     \end{tabular}
-
+    
     \vspace{0.3cm}
-
+    
     \textbf{Domain:} Mathematical reasoning and problem-solving
 \end{column}
 \end{columns}
 
+\end{frame}

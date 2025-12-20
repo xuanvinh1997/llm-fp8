@@ -1,0 +1,10 @@
+\begin{MintedVerbatim}[commandchars=\\\{\}]
+\PYG{p}{\PYGZob{}}
+  \PYG{l+s+s2}{\PYGZdq{}}\PYG{l+s+s2}{problem}\PYG{l+s+s2}{\PYGZdq{}}\PYG{p}{:} \PYG{l+s+s2}{\PYGZdq{}}\PYG{l+s+s2}{If 3x + 2 = 14, what}
+   \PYG{o+ow}{is} \PYG{n}{the} \PYG{n}{value} \PYG{n}{of} \PYG{n}{x}\PYGZbs{}\PYG{err}{?}\PYG{l+s+s2}{\PYGZdq{}}\PYG{l+s+s2}{,}
+  \PYG{l+s+s2}{\PYGZdq{}}\PYG{l+s+s2}{solution}\PYG{l+s+s2}{\PYGZdq{}}\PYG{p}{:} \PYG{l+s+s2}{\PYGZdq{}}\PYG{l+s+s2}{Step 1: Subtract 2}
+   \PYG{k+kn}{from}\PYG{+w}{ }\PYG{n+nn}{both} \PYG{n}{sides}\PYG{p}{:} \PYG{l+m+mi}{3}\PYG{n}{x} \PYG{o}{=} \PYG{l+m+mi}{12}\PYGZbs{}\PYG{n}{n}
+   \PYG{n}{Step} \PYG{l+m+mi}{2}\PYG{p}{:} \PYG{n}{Divide} \PYG{n}{by} \PYG{l+m+mi}{3}\PYG{p}{:} \PYG{n}{x} \PYG{o}{=} \PYG{l+m+mi}{4}\PYGZbs{}\PYG{n}{n}
+   \PYG{n}{Answer}\PYG{p}{:} \PYG{l+m+mi}{4}\PYG{l+s+s2}{\PYGZdq{}}
+\PYG{p}{\PYGZcb{}}
+\end{MintedVerbatim}

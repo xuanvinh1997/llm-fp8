@@ -1,14 +1,14 @@
-\begin{frame}{Landscape of LLM Optimization}
+\begin{frame}{Related works: Landscape of LLM optimization}
     \begin{columns}[t]
         \begin{column}{0.48\textwidth}
             \begin{block}{Weight Reduction}
             \small
-            \textbf{Quantization} (GPTQ, AWQ):
+            \textbf{Quantization} (GPTQ \cite{frantar2022gptq}, AWQ \cite{lin2023awq}):
             \begin{itemize}
                 \item Reduces precision (e.g., INT4, INT8)
                 \item \textit{Limitation}: Often post-training only, complex calibration
             \end{itemize}
-            \textbf{Pruning} (SparseGPT):
+            \textbf{Pruning} (SparseGPT \cite{frantar2023sparsegpt}):
             \begin{itemize}
                 \item Removes redundant weights
                 \item \textit{Limitation}: Irregular sparsity hard to accelerate
@@ -19,7 +19,7 @@
         \begin{column}{0.48\textwidth}
             \begin{block}{Efficient Training (PEFT)}
             \small
-            \textbf{LoRA / QLoRA}:
+            \textbf{LoRA \cite{hu2021lora} / QLoRA \cite{dettmers2024qlora}}:
             \begin{itemize}
                 \item Low-rank adaptation of weights
                 \item \textit{Limitation}: Updates only adapters, not full model
@@ -28,7 +28,7 @@
 
             \begin{block}{Runtime Optimization}
             \small
-            \textbf{FlashAttention}:
+            \textbf{FlashAttention \cite{dao2022flashattention}}:
             \begin{itemize}
                 \item IO-aware exact attention
                 \item \textit{Limitation}: Focuses on speed, not memory capacity
@@ -38,12 +38,12 @@
     \end{columns}
 \end{frame}
 
-\begin{frame}{Why Existing Solutions Fall Short}
+\begin{frame}{Related works: Why existing solutions fall short}
 
     \textbf{Current Optimization Approaches}
     
     \small
-    \begin{tabular}{@{}p{3.5cm}p{4cm}p{3cm}@{}}
+    \begin{tabular}{@{}p{3.5cm}p{4cm}p{4cm}@{}}
     \toprule
     \textbf{Method} & \textbf{Advantage} & \textbf{Limitation} \\
     \midrule
@@ -54,14 +54,14 @@
     \bottomrule
     \end{tabular}
 
-    \vspace{0.6cm}
+    \vspace{0.2cm}
 
-    \begin{alertblock}{Research Question}
+    \begin{alertblock}{Research question}
     \small
     Can we achieve \textbf{full-parameter training} with \textbf{FP8 efficiency} while maintaining \textbf{BF16-level accuracy}?
     \end{alertblock}
 
-    \vspace{0.4cm}
+    \vspace{0.2cm}
 
-    \textbf{Our Hypothesis:} Different transformer components have distinct numerical characteristics $\rightarrow$ Layer-wise precision assignment optimizes the trade-off.
+    \textbf{Our hypothesis:} Different transformer components have distinct numerical characteristics $\rightarrow$ Layer-wise precision assignment optimizes the trade-off \cite{micikevicius2022fp8formatsdeeplearning}.
 \end{frame}

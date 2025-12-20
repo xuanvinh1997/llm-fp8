@@ -1,5 +1,5 @@
-\begin{frame}[fragile]{Implementation: Custom Transformer Engine Layer}
-    \begin{block}{Dynamic Layer Replacement}
+\begin{frame}[fragile]{Implementation: Custom transformer engine layer}
+    \begin{block}{Dynamic layer replacement}
     \small We implemented a custom \texttt{TELlamaDecoderLayer} to inject FP8 logic while preserving weights:
     \end{block}
     \vspace{0.2cm}
@@ -27,7 +27,7 @@ def replace_decoder(te_decoder_cls):
     \end{minted}
 
     \begin{itemize}
-        \item \textbf{Runtime Integration}: Dynamic patching of Hugging Face architectures
-        \item \textbf{Format Management}: Automated mixed-precision control via \texttt{fp8\_autocast}
+        \item \textbf{Runtime integration}: Dynamic patching of Hugging Face architectures
+        \item \textbf{Format management}: Automated mixed-precision control via \texttt{fp8\_autocast}
     \end{itemize}
 \end{frame}

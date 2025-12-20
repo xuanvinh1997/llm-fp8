@@ -1,32 +1,42 @@
-\begin{frame}{Proposed Approach: Layer-Wise FP8 Specialization}
+\begin{frame}{Our proposed method: Layer-wise FP8 specialization}
 
-\textbf{Key Observation:} Transformer components exhibit distinct numerical characteristics requiring tailored precision-range allocation
+\begin{columns}[c]
+\begin{column}{0.58\textwidth}
+\textbf{Key observation:} Transformer components exhibit distinct numerical characteristics requiring tailored precision-range allocation \cite{micikevicius2022fp8formatsdeeplearning}
 
 \vspace{0.4cm}
 
-\textbf{Methodology: Component-Specific Format Assignment}
+\textbf{Methodology: Component-specific format assignment}
 
 \small
 \begin{itemize}
-    \item \textbf{Attention Layers}: Hybrid E4M3/E5M2
+    \item \textbf{Attention layers}: Hybrid E4M3/E5M2
     \begin{itemize}
         \small
         \item Forward: \textbf{E4M3} (bounded activations)
         \item Backward: \textbf{E5M2} (extended range for gradient amplification)
     \end{itemize}
-    \item \textbf{MLP Layers}: E4M3 only
+    \item \textbf{MLP layers}: E4M3 only
     \begin{itemize}
         \small
         \item Forward/Backward: \textbf{E4M3}
         \item Narrow distribution $\rightarrow$ precision prioritized
     \end{itemize}
 \end{itemize}
+\end{column}
+
+\begin{column}{0.25\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{figures/hypothesis.png}
+    \tiny Layer-wise FP8 hypothesis
+\end{column}
+\end{columns}
 
 \end{frame}
 
-\begin{frame}{Theoretical Foundation}
+\begin{frame}{Our proposed method: Theoretical foundation}
 
-\textbf{Attention: E5M2 Assignment}
+\textbf{Attention: E5M2 assignment}
 
 \small
 \textit{Rationale: Softmax Gradient Amplification}
@@ -38,7 +48,7 @@
 
 \vspace{0.5cm}
 
-\textbf{MLP: E4M3 Assignment}
+\textbf{MLP: E4M3 assignment}
 
 \small
 \textit{Rationale: Precision-Dominant Requirement}

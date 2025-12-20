@@ -1,5 +1,7 @@
-\begin{frame}{Results: Memory Efficiency}
-    \begin{block}{VRAM Usage Comparison}
+\begin{frame}{Experiment and analysis: Memory efficiency}
+
+    \textbf{VRAM usage comparison}
+    
     \centering
     \begin{tabular}{lccc}
     \toprule
@@ -9,17 +11,18 @@
     Llama-3.1-8B & 80.0 GB & 88.3 GB & \textcolor{red}{+10.4\%} \\
     \bottomrule
     \end{tabular}
-    \end{block}
 
-    \vspace{0.5cm}
+    \vspace{0.8cm}
 
-    \begin{alertblock}{Analysis of 8B Memory Overhead}
+    \textbf{Analysis of 8B memory overhead}
+    
     \small
-    While 3B shows expected savings, 8B shows an increase. This is a known trade-off in our current implementation:
+    While 3B shows expected savings, 8B shows an increase due to:
     \begin{itemize}
-        \item \textbf{Workspace Buffers}: Fixed-size buffers for FP8 casting operations.
-        \item \textbf{Scaling Metadata}: Storing history/amax for dynamic scaling.
-        \item \textit{Note}: The \textbf{27\% speedup} outweighs this memory cost for training throughput.
+        \item \textbf{Workspace buffers}: Fixed-size buffers for FP8 casting operations
+        \item \textbf{Scaling metadata}: Storing history/amax for dynamic scaling
     \end{itemize}
-    \end{alertblock}
+    
+    \vspace{0.3cm}
+    \textit{Note}: The \textbf{27\% speedup} outweighs this memory cost for training throughput
 \end{frame}

@@ -1,44 +1,52 @@
-\begin{frame}{Experimental Setup}
+\begin{frame}{Experiment and analysis: Experimental setup}
 
 \begin{columns}[t]
-\begin{column}{0.48\textwidth}
-    \textbf{Models \& Dataset}
+\begin{column}{0.58\textwidth}
+    \textbf{Models and dataset}
     \small
     \begin{itemize}
-        \item \textbf{Llama-3.2-3B} \& \textbf{Llama-3.1-8B}
-        \item OpenMathInstruct-2 (100K samples)
-        \item 3 epochs, seq. length 512
-        \item AdamW, lr 1e-5, grad accum. 4
+        \item \textbf{Models}: Llama-3.2-3B \cite{meta2024llama3.2}, Llama-3.1-8B \cite{meta2024llama3.1}
+        \item \textbf{Dataset}: OpenMathInstruct-2 \cite{toshniwal2024openmath2} (100K samples)
+        \item \textbf{Training}: 3 epochs, seq. length 512, batch size 24/6
+        \item \textbf{Optimizer}: AdamW, lr 1e-5, grad accum. 4
     \end{itemize}
 
-    \vspace{0.3cm}
+    \vspace{0.4cm}
 
-    \textbf{Hardware}
+    \textbf{Hardware \& software}
     \small
     \begin{itemize}
-        \item NVIDIA RTX 6000 Pro GPUs (96 GB)
-        \item PyTorch 2.7+, Transformer Engine 2.5.0
+        \item \textbf{GPU}: NVIDIA RTX 6000 Pro (96 GB VRAM)
+        \item \textbf{Framework}: PyTorch 2.7+, Transformer Engine 2.5.0 \cite{transformer_engine}
     \end{itemize}
 \end{column}
 
-\begin{column}{0.48\textwidth}
-    \textbf{Baselines Comparison}
+\begin{column}{0.38\textwidth}
+    \textbf{Baselines}
     \small
-    \begin{enumerate}
-        \item \textbf{BF16} {\footnotesize (mixed precision)}
-
-        \item \textbf{NVIDIA Standard} {\footnotesize (Uniform FP8, delayed scaling)}
-
-        \item \textbf{Ours} {\footnotesize (layer-wise FP8)}
-    \end{enumerate}
+    
+    \vspace{0.2cm}
+    
+    \textbf{1. BF16}
+    
+    {\footnotesize Mixed precision baseline}
+    
+    \vspace{0.3cm}
+    
+    \textbf{2. NVIDIA Standard}
+    
+    {\footnotesize Uniform FP8 with delayed scaling}
+    
+    \vspace{0.3cm}
+    
+    \textbf{3. Ours}
+    
+    {\footnotesize Layer-wise FP8 assignment}
 \end{column}
 \end{columns}
 
-\vspace{0.4cm}
+\vspace{0.5cm}
 
-\begin{alertblock}{Evaluation Metrics}
-\small
-Training time • Memory usage • Loss variance • Perplexity • Convergence
-\end{alertblock}
+\textbf{Evaluation metrics:} Training time, Memory usage, Loss variance, Perplexity, Convergence
 
 \end{frame}
