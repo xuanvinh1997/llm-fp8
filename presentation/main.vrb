@@ -1,0 +1,32 @@
+\frametitle{Implementation: Custom Transformer Engine Layer}
+\begin{block}{Dynamic Layer Replacement}
+    \small We implemented a custom \texttt{TELlamaDecoderLayer} to inject FP8 logic while preserving weights:
+    \end{block}
+    \vspace{0.2cm}
+
+    \begin{minted}[fontsize=\tiny]{python}
+class TELlamaDecoderLayer(torch.nn.Module):
+    def __init__(self, config, ...):
+        # Replace standard Attention with TE FP8-aware module
+        self.self_attention = te.pytorch.MultiheadAttention(
+            hidden_size=config.hidden_size,
+            ...
+        )
+        # Replace MLP with TE LayerNormMLP
+        self.layernorm_mlp = te.pytorch.LayerNormMLP(
+            activation="swiglu", ...
+        )
+
+# Context manager for runtime patching
+@contextmanager
+def replace_decoder(te_decoder_cls):
+    original_cls = LlamaDecoderLayer
+    LlamaDecoderLayer = te_decoder_cls
+    yield
+    LlamaDecoderLayer = original_cls
+    \end{minted}
+
+    \begin{itemize}
+        \item \textbf{Seamless Integration}: Patches Hugging Face models at runtime
+        \item \textbf{FP8 Autocast}: Manages mixed formats via \texttt{te.fp8\_autocast}
+    \end{itemize}

@@ -1,8 +1,8 @@
-\begin{frame}[squeeze]{Results: Performance Improvements}
+\begin{frame}{Results: Training Speedup}
 
 \begin{columns}[c]
 \begin{column}{0.4\textwidth}
-    \begin{block}{Training Time Reduction}
+    \begin{block}{Time Reduction vs BF16}
     \small
     \begin{tabular}{@{}lcc@{}}
     \toprule
@@ -17,18 +17,11 @@
     \end{tabular}
     \end{block}
 
-    \vspace{0.15cm}
+    \vspace{0.5cm}
 
-    \begin{block}{Memory Efficiency}
+    \begin{alertblock}{Throughput}
     \small
-    82.4 GB $\rightarrow$ \textbf{74.2 GB} (\textcolor{blue}{10\% $\downarrow$})
-    \end{block}
-
-    \vspace{0.15cm}
-
-    \begin{alertblock}{Key Findings}
-    \small
-    1.3-1.7$\times$ speedup over BF16
+    Achieved \textbf{1.3-1.7$\times$ speedup} by leveraging FP8 Tensor Cores.
     \end{alertblock}
 \end{column}
 

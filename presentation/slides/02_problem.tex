@@ -1,23 +1,25 @@
-\begin{frame}[squeeze]{Problem \& Motivation}
+\begin{frame}{Motivation}
 
-\begin{block}{Challenge: Memory \& Compute Demands}
+\textbf{Current State: LLM Training Challenges}
+
 \small
+Training large language models (e.g., Llama-3) requires:
 \begin{itemize}
-    \item Llama-3.2-3B: \textbf{82.4 GB}, Llama-3.1-8B: \textbf{80+ GB}
-    \item Training time: \textbf{3.6h - 9.1h} for 100K samples
+    \item \textbf{Massive Memory}: 80+ GB VRAM for 3B-8B parameter models
+    \item \textbf{Long Training Time}: 3.6-9.1 hours per 100K samples
+    \item \textbf{Expensive Hardware}: Limited to high-end data center GPUs
 \end{itemize}
-\end{block}
 
-\vspace{0.1cm}
+\vspace{0.5cm}
 
-\begin{block}{Current Limitations}
+\textbf{Root Cause: FP16/BF16 Inefficiency}
+
 \small
+Conventional mixed-precision training suffers from:
 \begin{itemize}
-    \item FP16/BF16 can waste memory
-    \item Uniform format assignment
-    \item Misses format strengths
+    \item \textbf{Memory Waste}: 16-bit precision for all layers uniformly
+    \item \textbf{Missed Opportunity}: Modern GPUs have FP8 Tensor Cores (2$\times$ throughput)
+    \item \textbf{One-Size-Fits-All}: Ignores layer-specific numerical requirements
 \end{itemize}
-\end{block}
-
 
 \end{frame}

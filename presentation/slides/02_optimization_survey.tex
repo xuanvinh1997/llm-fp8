@@ -1,0 +1,67 @@
+\begin{frame}{Landscape of LLM Optimization}
+    \begin{columns}[t]
+        \begin{column}{0.48\textwidth}
+            \begin{block}{Weight Reduction}
+            \small
+            \textbf{Quantization} (GPTQ, AWQ):
+            \begin{itemize}
+                \item Reduces precision (e.g., INT4, INT8)
+                \item \textit{Limitation}: Often post-training only, complex calibration
+            \end{itemize}
+            \textbf{Pruning} (SparseGPT):
+            \begin{itemize}
+                \item Removes redundant weights
+                \item \textit{Limitation}: Irregular sparsity hard to accelerate
+            \end{itemize}
+            \end{block}
+        \end{column}
+
+        \begin{column}{0.48\textwidth}
+            \begin{block}{Efficient Training (PEFT)}
+            \small
+            \textbf{LoRA / QLoRA}:
+            \begin{itemize}
+                \item Low-rank adaptation of weights
+                \item \textit{Limitation}: Updates only adapters, not full model
+            \end{itemize}
+            \end{block}
+
+            \begin{block}{Runtime Optimization}
+            \small
+            \textbf{FlashAttention}:
+            \begin{itemize}
+                \item IO-aware exact attention
+                \item \textit{Limitation}: Focuses on speed, not memory capacity
+            \end{itemize}
+            \end{block}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{Why Existing Solutions Fall Short}
+
+    \textbf{Current Optimization Approaches}
+    
+    \small
+    \begin{tabular}{@{}p{3.5cm}p{4cm}p{3cm}@{}}
+    \toprule
+    \textbf{Method} & \textbf{Advantage} & \textbf{Limitation} \\
+    \midrule
+    PTQ (GPTQ, AWQ) & Small model size & Accuracy loss, no training \\
+    PEFT (LoRA) & Low memory training & Partial parameters only \\
+    FlashAttention & Fast attention & No memory reduction \\
+    BF16 Full Training & High accuracy & 2$\times$ memory cost \\
+    \bottomrule
+    \end{tabular}
+
+    \vspace{0.6cm}
+
+    \begin{alertblock}{Research Question}
+    \small
+    Can we achieve \textbf{full-parameter training} with \textbf{FP8 efficiency} while maintaining \textbf{BF16-level accuracy}?
+    \end{alertblock}
+
+    \vspace{0.4cm}
+
+    \textbf{Our Hypothesis:} Different transformer components have distinct numerical characteristics $\rightarrow$ Layer-wise precision assignment optimizes the trade-off.
+\end{frame}

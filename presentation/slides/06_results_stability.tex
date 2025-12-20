@@ -1,41 +1,24 @@
-\begin{frame}{Results: Loss Variance Analysis}
-
+\begin{frame}{Results: Numerical Stability}
 \begin{columns}[c]
 \begin{column}{0.4\textwidth}
-    \begin{block}{Loss Variance Comparison}
-    
-    \vspace{0.2cm}
+    \begin{block}{Loss Variance Metrics}
+    \small
     \begin{itemize}
-        \item Our method: \textbf{$<$ 0.4}
-        \item Hybrid FP8: Spikes \textbf{$\geq$ 0.8}
-        \item \textcolor{blue}{\textbf{50\% lower variance}}
+        \item \textbf{Ours}: \textbf{$<$ 0.4} (Consistent)
+        \item \textbf{Hybrid FP8}: Spikes \textbf{$\geq$ 0.8}
+        \item \textbf{Result}: \textcolor{blue}{50\% lower variance}
     \end{itemize}
     \end{block}
-
-    \vspace{0.3cm}
-
-    \begin{alertblock}{Why More Stable?}
-    \begin{itemize}
-        \item E5M2 for Q/K paths
-        \item Prevents overflow/underflow
-        \item E4M3 for MLP stability
-        \item Component-aware design
-    \end{itemize}
-    \end{alertblock}
+    
+    \vspace{0.5cm}
+    \tiny
+    Variance: $\sigma^2 = \frac{1}{n}\sum_{i=1}^{n}(L_i - \bar{L})^2$
 \end{column}
 
 \begin{column}{0.60\textwidth}
     \centering
     \includegraphics[width=\textwidth]{figures/numeric_stability.png}
-
-    \vspace{0.3cm}
-
-    \small
-    \textbf{Key Observation:} Layer-wise FP8 maintains consistent low variance throughout training, while Hybrid FP8 shows periodic instability spikes.
+    \tiny Loss variance over training steps
 \end{column}
 \end{columns}
-\vspace{0.3cm}
-\tiny
-    Variance: $\sigma^2 = \frac{1}{n}\sum_{i=1}^{n}(L_i - \bar{L})^2$
-
 \end{frame}

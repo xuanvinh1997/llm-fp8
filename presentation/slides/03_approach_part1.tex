@@ -1,35 +1,51 @@
-\begin{frame}[squeeze]{Proposed Approach: Layer-Wise FP8 Specialization}
+\begin{frame}{Proposed Approach: Layer-Wise FP8 Specialization}
 
-\begin{alertblock}{Key Insight}
-\small Different transformer components need different precision-range trade-offs
-\end{alertblock}
+\textbf{Key Observation:} Transformer components exhibit distinct numerical characteristics requiring tailored precision-range allocation
 
-\vspace{0.1cm}
+\vspace{0.4cm}
 
-\begin{block}{Strategy: Hybrid Format Assignment}
+\textbf{Methodology: Component-Specific Format Assignment}
+
 \small
 \begin{itemize}
-    \item \textbf{Attention layers}: Use hybrid E4M3 + E5M2
+    \item \textbf{Attention Layers}: Hybrid E4M3/E5M2
     \begin{itemize}
         \small
-        \item Forward pass: \textbf{E4M3} (stable activations)
-        \item Backward pass: \textbf{E5M2} (gradient explosions need extended range)
+        \item Forward: \textbf{E4M3} (bounded activations)
+        \item Backward: \textbf{E5M2} (extended range for gradient amplification)
     \end{itemize}
-    \item \textbf{MLP layers}: Use only E4M3
+    \item \textbf{MLP Layers}: E4M3 only
     \begin{itemize}
         \small
-        \item Both forward \& backward: \textbf{E4M3}
-        \item Concentrated distributions $\rightarrow$ Higher precision preferred
+        \item Forward/Backward: \textbf{E4M3}
+        \item Narrow distribution $\rightarrow$ precision prioritized
     \end{itemize}
 \end{itemize}
-\end{block}
 
-\vspace{0.1cm}
+\end{frame}
 
-\begin{alertblock}{Rationale}
+\begin{frame}{Theoretical Foundation}
+
+\textbf{Attention: E5M2 Assignment}
+
 \small
-\textbf{Attention}: Gradients through softmax have wide dynamic range $\rightarrow$ E5M2 for backward\\
-\textbf{MLP}: Feed-forward has narrow range in both directions $\rightarrow$ E4M3 precision
-\end{alertblock}
+\textit{Rationale: Softmax Gradient Amplification}
+\begin{itemize}
+    \item Softmax gradients exhibit extreme dynamic range
+    \item \textbf{E5M2} (max $\sim$57,000): Prevents overflow in backward pass
+    \item \textbf{E4M3} (max $\sim$448): Insufficient for gradient magnitudes
+\end{itemize}
+
+\vspace{0.5cm}
+
+\textbf{MLP: E4M3 Assignment}
+
+\small
+\textit{Rationale: Precision-Dominant Requirement}
+\begin{itemize}
+    \item Feed-forward networks exhibit concentrated value distributions
+    \item \textbf{E4M3}: Higher mantissa precision minimizes quantization error
+    \item Critical for maintaining convergence accuracy
+\end{itemize}
 
 \end{frame}
